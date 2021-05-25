@@ -7,5 +7,7 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ndarray = "0.15.1"
-itertools = "0.10.0"
+ndarray = ""
+ndarray-stats = ""
+noisy_float = ""
+itertools = ""
