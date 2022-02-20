@@ -1,110 +1,75 @@
-extern crate itertools;
 extern crate ndarray;
-extern crate ndarray_stats;
-extern crate noisy_float;
+extern crate rand;
+extern crate ndarray_rand;
+extern crate sort;
 
-use ndarray_stats::{
-    histogram::{strategies::Auto, Bins, Edges, Grid, GridBuilder, Histogram},
-    HistogramExt,
-};
-use std::error::Error;
-use std::result::Result;
-use std::{ops::Index, vec};
-
-//use ndarray::{Array1, Array3};
+use std::time::{Duration, Instant};
 use itertools::Itertools;
+use ndarray::prelude::*;
 use ndarray::{arr1, array, s, Array, Array3};
-use noisy_float::types::{n64, N64};
+use rand::distributions::{Distribution};
+use ndarray_rand::RandomExt;
+use ndarray_rand::rand_distr::Uniform as rand_uniform;
+use ndhistogram::{Histogram, axis::Axis, ndhistogram, axis::Uniform, axis::Category, value::Mean};
 
-fn calc_covariance() {
-    // initialize dummy values
-    let x = arr1(&[25, 25, 30, 35, 25, 40, 35, 30]);
-    let y = arr1(&[110, 115, 130, 125, 115, 120, 115, 120]);
-    let t = arr1(&[1, 2, 3, 4, 2, 3, 4, 2]);
-    let ids = arr1(&[0, 0, 1, 1, 1, 2, 3, 4]);
+fn genData(Nbins: usize, Nshots: usize, Npart: usize) -> Array2<f64> {
+    // generate example data
 
-    // helpful discussion on unique
-    // https://datacrayon.com/posts/programming/rust-notebooks/unique-array-elements-and-their-frequency/
-    let nr_triggers = ids.iter().unique().count(); // how many unique trigger we have
-    let unique_triggers = ids.iter().cloned().unique().collect_vec();
-    let mut unique_frequency: Vec<usize> = Vec::<usize>::new();
-    for unique_elem in unique_triggers.iter() {
-        unique_frequency.push(ids.iter().filter(|&elem| elem == unique_elem).count());
+    // initialize empty array
+    let mut data = Array::<f64,_>::zeros((Nshots, Npart).f());
+    // https://rust-lang-nursery.github.io/rust-cookbook/algorithms/randomness.html?highlight=random%20numb#generate-random-numbers
+    let mut rng = rand::thread_rng();
+    let dt1: rand::distributions::Uniform<f64> = rand::distributions::Uniform::from(-0.1..0.1);
+    for i in 0..Nshots {
+        let throw = dt1.sample(&mut rng);
+        data[[i, 0]] = 3. - throw;
+        data[[i, 1]] = 6. + throw;
+        let a: ArrayBase<ndarray::OwnedRepr<f64>, Dim<[usize; 1]>> = Array::random(Npart-2, rand_uniform::new(0., 10.));
+        //data[[i, 2:]] = 
+        data.slice_mut(s![i, 2..]).assign(&a);
+
+        // sort
+        // check this https://github.com/rust-ndarray/ndarray/blob/master/examples/sort-axis.rs
+        let mut vec: Vec<f64> = data.slice(s![i, ..]).to_vec();
+        vec.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        data.slice_mut(s![i, ..]).assign(&Array::from_vec(vec));
+
+        //println!("{} {} {}", i, throw, data.slice(s![i, ..]));
     }
-
-    // build n-dimensional array for future advanced features
-    let max_trig_len = *unique_frequency.iter().max().unwrap();
-    let mut data = Array3::<i32>::ones([nr_triggers, max_trig_len, 3]);
-    data *= -1;
-    for trigger_num in unique_triggers {
-        for (i, val) in ids.iter().positions(|&x| x == trigger_num).enumerate() {
-            data[[trigger_num, i, 0]] = x[val];
-            data[[trigger_num, i, 1]] = y[val];
-            data[[trigger_num, i, 2]] = t[val];
-        }
-    }
-    let data_to_correlate = data.slice(s![.., .., 2]);
-
-    /*
-        bins = 5  # bins should as many as you have individual t's (in this case start to count a 0)
-    correlated = np.zeros((bins, bins))
-    for frame in data_to_corr:
-        hist_1d_j = np.histogram(frame, bins=range(0, len(data_to_corr) + 1))[0]
-        correlated += hist_1d_j[:, None] * hist_1d_j[None, :]
-        */
+    
+    return data
 }
 
-fn hist_2d() -> Result<(), Box<dyn Error>> {
-    let edges = Edges::from(vec![n64(-1.), n64(0.), n64(1.)]);
-    let bins = Bins::new(edges);
-    let square_grid = Grid::from(vec![bins.clone(), bins.clone()]);
-    let mut histogram = Histogram::new(square_grid);
-
-    let observation = array![n64(0.5), n64(0.6)];
-
-    histogram.add_observation(&observation)?;
-
-    let histogram_matrix = histogram.counts();
-    let expected = array![[0, 0], [0, 1],];
-    assert_eq!(histogram_matrix, expected.into_dyn());
-
-    Ok(())
-}
-
-fn hist_1d() {
-    // 1-dimensional observations, as a (n_observations, n_dimension) 2-d matrix
-    let observations =
-        Array::from_shape_vec((12, 1), vec![1, 4, 5, 2, 100, 20, 50, 65, 27, 40, 45, 23]).unwrap();
-
-    // The optimal grid layout is inferred from the data, given a chosen strategy, Auto in this case
-    let grid = GridBuilder::<Auto<usize>>::from_array(&observations)
-        .unwrap()
-        .build();
-
-    let histogram = observations.histogram(grid);
-
-    let histogram_matrix = histogram.counts();
-
-    println!("{:?}", histogram_matrix);
-}
-
-fn hist_1d_fixed_bins() {
-    // build histogram with fixed edges, 
-    // value=edge doesn't fall into bin, compare: https://docs.rs/ndarray-stats/0.5.0/ndarray_stats/histogram/struct.Grid.html
-    let observations =
-        Array::from_shape_vec((12, 1), vec![1, 4, 5, 2, 100, 20, 50, 65, 27, 40, 45, 23]).unwrap();
-
-    let edges = Edges::from(vec![1, 10, 20, 30, 50, 70, 90, 101]);
-    let bins_x = Bins::new(edges);
-    let grid = Grid::from(vec![bins_x]);
-
-    let histogram = observations.histogram(grid);
-
-    let histogram_matrix = histogram.counts();
-
-    println!("{:?}", histogram_matrix);
-}
 
 fn main() {
-    hist_1d_fixed_bins();
+    let nbins = 100;
+    let Nshots = 10_000;
+    let Npart = 10;
+
+    let data = genData(nbins, Nshots, Npart);
+
+
+    // sort data into histogram iterating through data 2D array
+    // create a 2D histogram
+    let mut hist = ndhistogram!(Uniform::<f64>::new(nbins, 0., 10.0), Uniform::<f64>::new(nbins, 0.,
+    10.0));
+    let (mut p1, mut p2) = (0, 0);
+    let start = Instant::now();
+    for i in 0..Nshots {
+        p1 = 0;
+        while p1 < Npart {
+            p2 = p1 + 1;
+            while p2 < Npart {
+                hist.fill(&(data[[i, p1]], data[[i, p2]]));
+                p2 += 1;
+            }
+            p1 += 1;
+        }
+    }
+    let duration = start.elapsed();
+
+    println!("{:?}", hist);
+    println!("{:?}:", duration);
+
+
 }
