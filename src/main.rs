@@ -48,7 +48,6 @@ fn main() {
 
     let data = genData(nbins, Nshots, Npart);
 
-
     // sort data into histogram iterating through data 2D array
     // create a 2D histogram
     let mut hist = ndhistogram!(Uniform::<f64>::new(nbins, 0., 10.0), Uniform::<f64>::new(nbins, 0.,

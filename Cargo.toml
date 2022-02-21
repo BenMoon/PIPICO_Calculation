@@ -1,10 +1,14 @@
 [package]
-name = "pipico_simple_example"
+name = "pipico"
 version = "0.1.0"
 authors = ["BenMoon <brombh@desy.de>"]
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "pipico"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
 
 [dependencies]
 ndhistogram = "0.6.2"
@@ -15,3 +19,11 @@ itertools = "0.10.3"
 rand = "0.8.5"
 ndarray-rand = "0.14.0"
 sort = "0.8.5"
+numpy = "0.15.1"
+
+[dependencies.pyo3]
+version = "0.15.1"
+features = ["extension-module"]
+
+[build-dependencies]
+pyo3-build-config = "0.15.1"
