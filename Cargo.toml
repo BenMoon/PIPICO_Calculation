@@ -18,8 +18,8 @@ noisy_float = "0.2.0"
 itertools = "0.10.3"
 rand = "0.8.5"
 ndarray-rand = "0.14.0"
-sort = "0.8.5"
 numpy = "0.15.1"
+rayon = "1.5.1"
 
 [dependencies.pyo3]
 version = "0.15.1"

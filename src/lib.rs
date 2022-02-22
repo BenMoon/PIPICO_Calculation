@@ -4,13 +4,14 @@ use ndarray::{s, Array1, Array2};
 use ndhistogram::{axis::Uniform, ndhistogram, Histogram};
 use numpy::{PyArray2, PyReadonlyArray2, ToPyArray};
 use pyo3::{pymodule, types::PyModule, PyResult, Python};
+use rayon::prelude::*;
 
 /// calculate a covariance map
 #[pymodule]
 fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
 
     /// calculate a covariance map
-    /// x: 2D array with a ToF trace in every row
+    /// x: 2D array with a ToF trace in every row, requires the rows to sorted
     /// nbins: number of bins for map
     /// min: histogram min
     /// max: histogram max
@@ -69,20 +70,24 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     }
 
     /// calculate a covariance map
-    /// x: list of lists with a ToF trace in every row
+    /// x: list of lists with a ToF trace in every row, sorted not required
     /// nbins: number of bins for map
     /// min: histogram min
     /// max: histogram max
     #[pyfn(m)]
     fn pipico_lists<'py>(
         py: Python<'py>,
-        x: Vec<Vec<f64>>,
+        mut x: Vec<Vec<f64>>,
         n_bins: usize,
         min: f64,
         max: f64
     ) -> PyResult<&'py PyArray2<f64>> {
         //let data = x.as_array();
         //let Nshots = data.shape()[0];
+        //let mut data = x;
+
+        // sort data in each row
+        x.par_iter_mut().for_each(|row| {row.sort_by(|a, b| a.partial_cmp(b).unwrap())});
 
         // sort data into histogram iterating through data 2D array
         // initialize empty 2D histogram
