@@ -3,9 +3,9 @@ import time
 import pipico
 import matplotlib.pyplot as plt
 
-nbins = 10
-Nshots = 100
-Npart = 10
+nbins = 4000
+Nshots = 3_000
+Npart = 100
 
 # simulate some data
 data = np.zeros((Nshots, Npart))

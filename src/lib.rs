@@ -24,8 +24,6 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         let data = x.as_array();
         let Npart = data.shape()[1];
         let Nshots = data.shape()[0];
-        println!("{:?} {:?}", data.len(), data.shape());
-        //let nbins = bins;
 
         // sort data into histogram iterating through data 2D array
         // initialize empty 2D histogram
@@ -34,7 +32,6 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
             Uniform::<f64>::new(nbins, min, max)
         );
         let (mut p1, mut p2) = (0, 0);
-
         for i in 0..Nshots {
             p1 = 0;
             while p1 < Npart {
@@ -55,6 +52,14 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         //for item in hist.iter() {
         //    println!("{:?}, {:?}, {:?}", item.index, item.bin, item.value)
         //}
+        /*
+        hist.values().enumerate().filter_map(|(i, v)| {
+            let x = i % 12;
+            let y = i / 12;
+            if y > 0 && y < 11 && x > 0 && x < 11) { Some(v) } 
+            else { None }
+        })
+         */
         let a_hist: Array2<f64> = Array1::from_iter(hist.values().map(|v| *v).into_iter())
             .into_shape((nbins+2, nbins+2))
             .unwrap();
