@@ -14,8 +14,26 @@ You can provide a square numpy array (values in rows need to be sorted), or a li
 (values don't need to be sorted) which I usually generate from my data
 like
 ```python
-groups = list(data.groupby('trigger number')['tof'].apply(list))
-hist = pipico.pipico_list(groups)
+import pipico
+
+bins = 5000
+hist_min = 0
+hist_max = 5
+
+# calculate correlated events
+a = list(df.groupby(['nr'])['tof'].apply(list))
+pipico_map = pipico.pipico_lists(a, bins, hist_min, hist_max)
+
+# calculate un-correlated events
+h_1d = np.histogram(list(df['tof']), bins=bins, range=(hist_min, hist_max))[0] / len(a)
+pipico_bg = h_1d[:, None] * h_1d[None, :]
+j1d = np.arange(bins)
+jx, jy = np.meshgrid(j1d, j1d, indexing="ij")
+pipico_bg[jx <= jy] = 0
+pipico_bg[jx <= jy] = 0
+
+# subtract correlated from uncorrelated map:
+pipico_cov = pipico_map / len(a) - pipico_bg
 ```
 
 [Bins created](https://docs.rs/ndhistogram/0.6.2/ndhistogram/axis/struct.Uniform.html):

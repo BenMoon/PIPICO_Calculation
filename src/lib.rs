@@ -125,6 +125,7 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
             if y > 0 && y < 11 && x > 0 && x < 11) { Some(v) } 
             else { None }
         })
+        // The .values() part seems to imply there are keys, and it's probably easier to iterate over entries and filter by keys...
          */
         let a_hist: Array2<f64> = Array1::from_iter(hist.values().map(|v| *v).into_iter())
             .into_shape((n_bins+2, n_bins+2))
