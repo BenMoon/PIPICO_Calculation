@@ -10,6 +10,10 @@ This is work in progress and by no means stable, yet.
 The data is assumed to be a 2D array with your shots / triggers / data to correlate with one
 another, to be in a row.
 
+The return of the both functions are coincidence maps and thus uncorrelated events need to be
+subtracted separately.
+Returns are counts and isn't normalized to the number of triggers.
+
 You can provide a square numpy array (values in rows need to be sorted), or a list with of lists
 (values don't need to be sorted) which I usually generate from my data
 like

@@ -1,7 +1,7 @@
 extern crate ndarray;
 extern crate rand;
 extern crate ndarray_rand;
-extern crate sort;
+//extern crate sort;
 
 use std::time::{Duration, Instant};
 use itertools::Itertools;
