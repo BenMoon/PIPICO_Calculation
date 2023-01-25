@@ -2,7 +2,7 @@
 name = "pipico"
 version = "0.1.0"
 authors = ["BenMoon <brombh@desy.de>"]
-edition = "2018"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
@@ -11,19 +11,21 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [dependencies]
-ndhistogram = "0.6.2"
+ndhistogram = "0.8.0"
 ndarray = "0.15.4"
 ndarray-stats = "0.5.0"
 noisy_float = "0.2.0"
 itertools = "0.10.3"
 rand = "0.8.5"
 ndarray-rand = "0.14.0"
-numpy = "0.15.1"
-rayon = "1.5.1"
+numpy = "0.17.2"
+rayon = "1.6.1"
+polars = {version="0.26.1", features = ["lazy"]}
+pyo3-polars = {version = "*"}
 
 [dependencies.pyo3]
-version = "0.15.1"
+version = "0.17.3"
 features = ["extension-module"]
 
 [build-dependencies]
-pyo3-build-config = "0.15.1"
+pyo3-build-config = "0.17.3"

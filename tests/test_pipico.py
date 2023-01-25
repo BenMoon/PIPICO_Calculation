@@ -1,6 +1,8 @@
 import pipico
 
 import numpy as np
+import pandas as pd
+import polars as pl
 
 
 def test_pipico_equal_size():
@@ -72,3 +74,55 @@ def test_pipico_list():
         ]
     )
     assert (hist == should_be).all()
+
+
+def test_pipico_polars_filter_momentum():
+    df = pl.from_pandas(pd.read_feather('pipico_test_data.feather'))
+    data = [
+        [2.5, 3.2, 3.2, 3.2, 3.2, 3.5, 3.4, 3.6, 4.1, 4.9],
+        [1.5, 3.2, 3.2, 3.3, 3.2, 3.4, 4.1, 3.2],
+        [1.5, 1.5, 1.5, 1.5, 1.5, 3.2, 3.6, 3.2, 3.2],
+        [1.5, 1.5, 1.5, 1.5, 2.5, 3.4, 4.1],
+        [2.5, 3.2, 3.2, 3.5, 3.2, 3.6, 4.1, 5.5, 5.5, 5.5],
+        [1.5, 1.5, 3.2, 3.2, 3.2, 4.1, 3.5, 3.5, 3.2],
+        [1.5, 3.2, 3.4, 3.6, 4.1, 4.1, 4.1, 4.1],
+        [1.5, 1.5, 1.6, 1.5, 3.2, 3.4, 3.2, 3.1, 3.2],
+        [1.5, 3.2, 3.2, 3.2, 4.2, 4.1, 3.2, 3.4, 3.5, 5.5],
+        [1.5, 1.5, 1.5, 1.5, 1.5, 2.6, 3.2, 3.2, 3.2],
+    ]
+    data.append(data[0][::-1])
+    data.append(data[0][::-1])
+    data.append(data[0][::-1])
+    
+    trigger_nrs = [num for vec in [len(row)*[i] for i, row in enumerate(data)] for num in vec]
+    x = [i for vec in data for i in vec]
+
+    df = pl.from_pandas(
+        pd.DataFrame(np.column_stack((
+            trigger_nrs, x, x)), columns=['trigger nr', 'mz', 'p_abs']))
+
+    hist = pipico.polars_filter_momentum(
+        pydf=df[['trigger nr', 'mz', 'p_abs']],
+        col_grp='trigger nr', 
+        col_pipico='mz',
+        col_mask='p_abs',
+        n_bins=10, min_tof=1, max_tof=6)
+    
+    should_be = np.array(
+        [
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 33.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 9.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 75.0, 0.0, 27.0, 91.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 11.0, 0.0, 10.0, 64.0, 6.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 13.0, 0.0, 6.0, 52.0, 18.0, 7.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 4.0, 20.0, 8.0, 4.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 3.0, 14.0, 7.0, 5.0, 0.0, 0.0, 3.0],
+        ]
+    )
+    assert (hist == should_be).all()
+
+if __name__ == "__main__":
+    test_pipico_polars_filter_momentum()
