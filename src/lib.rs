@@ -1,10 +1,12 @@
 use std::usize;
+use std::ops::Add;
 
-use itertools::DedupBy;
 use ndarray::{s, Array1, Array2, Data};
 use ndarray::prelude::*;
+use ndarray_rand::rand_distr::num_traits::ToPrimitive;
 use ndhistogram::{axis::Uniform, ndhistogram, Histogram};
 use numpy::{PyArray2, PyReadonlyArray2, ToPyArray};
+use polars::export::arrow::compute::filter;
 use polars::lazy::dsl::apply_multiple;
 use pyo3::{pymodule, types::PyModule, PyResult, Python};
 
@@ -164,69 +166,65 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         pydf: PyDataFrame,
         col_grp: &str,
         col_pipico: &str,
-        col_mask: &str,
+        col_mask1: &str,
+        col_mask2: &str,
+        filter_delta: f64,
         n_bins: usize,
-        min_tof: f64,
-        max_tof: f64,
+        hist_min: f64,
+        hist_max: f64,
     //) -> PyResult<PyDataFrame> {
     ) -> PyResult<&'py PyArray2<f64>> {
         let df: DataFrame = pydf.into();
 
-        /*
-        let grouped = df.clone().lazy()
-            .groupby(["trigger nr"])
-            .agg([col(col_pipico).sort(false), col(col_mask)])
-            .collect().expect("something went wrong with grouping");
-        */
-
+        // compute the covariances for a frame/row
         let compute_covariance = move |s: &mut [Series]| {
+
+            // define 2D histogram into which the values get filled
             let mut hist = ndhistogram!(
-                Uniform::<f64>::new(n_bins, min_tof, max_tof),
-                Uniform::<f64>::new(n_bins, min_tof, max_tof)
+                Uniform::<f64>::new(n_bins, hist_min, hist_max),
+                Uniform::<f64>::new(n_bins, hist_min, hist_max)
             );
     
-            let df = df!("col_cov"  => s[0].clone(),
-                                    "col_mask" => s[1].clone()).unwrap();
-            
-            // filter data accordingly
-            /*
-            let mask = df
-                .lazy()
-                .filter(col("col_mask").gt(lit(5000.0)).and(col("col_mask").lt(20_000.0)))
-                .select([col("col_cov")])
-                .collect()
-                .expect("Could filter col_mask");
-             */
-        
+            let df = df!("col_cov"   => s[0].clone(),           // tof
+                                    "col_mask1" => s[1].clone(),           // p_x
+                                    "col_mask2" => s[2].clone()).unwrap(); // p_y
+            let df = df.sort(["col_cov"], false).unwrap();
+
             // https://docs.rs/polars/0.26.1/polars/docs/eager/index.html#extracting-data
             let ca = df.column("col_cov").unwrap().f64().unwrap();
-            //dbg!(&ca);
-            let mut p2 = 0;
-            for (p1, x) in ca.into_iter().enumerate() {
+            let mut p2;
+            for (p1, xx) in ca.into_iter().enumerate() {
                 p2 = p1 + 1;
-                match x {
-                    None => panic!("Not a float"),
-                    Some(x) =>
-                        // filter needs to go here...
-                        while p2 < ca.len() {
-                            hist.fill(&(x, ca.get(p2).unwrap()));
-                            //println!("{:?}={:?}, {:?}={:?}", p1, x, p2, ca.get(p2).unwrap());
-                            p2 += 1;
-                    }
+                let x = xx.unwrap();
+                let filter1 = df.column("col_mask1").unwrap().f64().unwrap().get(p1).unwrap();
+                let filter2 = df.column("col_mask2").unwrap().f64().unwrap().get(p1).unwrap();
+                // filter data accordingly to the new x
+                let masked = df
+                    .clone()
+                    .lazy()
+                    .slice(p2 as i64, df.height() as u32)
+                    .filter(lit(filter1).add(col("col_mask1")).pow(2).lt(filter_delta)
+                       .and(lit(filter2).add(col("col_mask2")).pow(2).lt(filter_delta)) )
+                    .select([col("col_cov")])
+                    .collect()
+                    .expect("Could filter col_mask");
+                let masked_col = masked.column("col_cov").unwrap().f64().unwrap();
+                for y in masked_col.into_iter() {
+                    hist.fill(&(x, y.unwrap()));
                 }
             }
+
             let a = hist.values().map(|v| *v).collect::<Vec<f64>>();
             Ok(Series::from_vec("hist", a))
         };
 
-        // group df according to 'trigger nr'
+        // group df according to 'trigger nr' and calculate covariance for the frames
         let grouped = df
-            .clone()
             .lazy()
             .groupby([col_grp])
             .agg([apply_multiple(
                 compute_covariance,
-                [col(col_pipico).sort(false), col(col_mask)],
+                [col(col_pipico), col(col_mask1), col(col_mask2)],
                 GetOutput::from_type(DataType::Float64),
                 false,
             ).alias("histogram")])
@@ -234,7 +232,8 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
             .collect()
             .expect("msg");
         let number_groups = grouped.height();
-        
+       
+        // convert histogram we retrieve for every group into a single 2D histo
         let a = grouped.explode(["histogram"]).unwrap();
         let ca = a.column("histogram").unwrap().f64().unwrap();
         let to_vec = ca.into_iter().map(|f| 
@@ -255,49 +254,11 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
 
         //Ok(PyDataFrame(df))
     }
-
-    fn compute_covariance_fn(s: &mut [Series]) -> PolarsResult<Series> {
-        // sort data into histogram iterating through data 2D array
-        // initialize empty 2D histogram
-        let n_bins = 1000;
-        let min = 15.0;
-        let max = 20.0;
-        let mut hist = ndhistogram!(
-            Uniform::<f64>::new(n_bins, min, max),
-            Uniform::<f64>::new(n_bins, min, max)
-        );
-
-        let df = df!("col_cov"  => s[0].clone(),
-                                "col_mask" => s[1].clone()).unwrap();
-        
-        /*
-        let mask = df
-            .lazy()
-            .filter(col("col_mask").gt(lit(5000.0)).and(col("col_mask").lt(20_000.0)))
-            .select([col("col_cov")])
-            .collect()
-            .expect("Could filter col_mask");
-         */
     
-        // https://docs.rs/polars/0.26.1/polars/docs/eager/index.html#extracting-data
-        let ca = df.column("col_cov").unwrap().f64().unwrap();
-        let mut p2 = 0;
-        for (p1, x) in ca.into_iter().enumerate() {
-            p2 = p1 + 1;
-            match x {
-                None => panic!("Not a float"),
-                Some(x) => 
-                    // filter actually needs to go here...
-                    while p2 < ca.len() {
-                        println!("{:?}, {:?}", p1, p2);
-                        p2 += 1;
-                }
-            }
-        }
 
-        let s1 = Series::new("float", &[Some(1.0), Some(f32::NAN), Some(3.0)]);
-        Ok(s1)
-    }
+
+    
 
     Ok(())
 }
+
