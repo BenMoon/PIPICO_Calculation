@@ -7,12 +7,12 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
 #name = "pipico"
-crate-type = ["cdylib"]
-#path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
 
 [dependencies]
 ndhistogram = "0.8.0"
-ndarray = "0.15.4"
+ndarray = {version="0.15.4", features=["rayon"]}
 ndarray-stats = "0.5.0"
 noisy_float = "0.2.0"
 itertools = "0.10.3"
@@ -21,14 +21,19 @@ ndarray-rand = "0.14.0"
 pyo3 = { version = "0.17.3", features = ["extension-module"] }
 numpy = "*"
 rayon = "1.6.1"
-polars = {version="0.26.1", features = ["lazy"]}
+polars = {version="0.26.1", features = ["lazy", "parquet", "ndarray"]}
 pyo3-polars = {version = "*"}
+num_cpus = "*"
 
 [build-dependencies]
 pyo3-build-config = "*"
 
 [dev-dependencies]
 criterion = "0.4.0"
+memuse = "*"
+
+[profile.release]
+debug = true
 
 [[bench]]
 name = "my_benchmark"
