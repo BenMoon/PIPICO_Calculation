@@ -9,9 +9,10 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     let mut file = std::fs::File::open("/Users/brombh/data/programm/rust/pipico_simple_example/tests/test_data.parquet").unwrap();
     // read to DataFrame
     let df = ParquetReader::new(&mut file).finish().unwrap();
+    dbg!(df.shape());
 
-    let a = df.select(["trigger nr", "tof", "px", "py"]).unwrap().to_ndarray().unwrap();
-    c.bench_function("numpy 1000", |b| b.iter(|| polars_filter_momentum_bench(black_box(df.clone()))));
+    let a = df.select(["trigger nr", "tof", "px", "py"]).unwrap().to_ndarray::<Float64Type>().unwrap();
+    c.bench_function("numpy 1000", |b| b.iter(|| polars_filter_momentum_bench(black_box(a.clone()))));
 }
 
 criterion_group!(benches, criterion_benchmark);

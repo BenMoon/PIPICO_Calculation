@@ -345,104 +345,71 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     Ok(())
 }
 
-pub fn polars_filter_momentum_bench(
-    df: DataFrame,
-    // col_grp: &str,
-    // col_pipico: &str,
-    // col_mask1: &str,
-    // col_mask2: &str,
-    // filter_delta: f64,
-    // n_bins: usize,
-    // hist_min: f64,
-    // hist_max: f64,
+pub  fn polars_filter_momentum_bench(
+    data: Array2<f64>,
 //) -> PyResult<PyDataFrame> {
-) -> Vec<f64> {
-    //let df: DataFrame = pydf.into();
+) -> Array2<f64> {
 
-    let col_grp = "trigger nr";
-    let col_pipico = "tof";
-    let col_mask1 = "px";
-    let col_mask2 = "py";
-    let filter_delta = 0.1;
+    let filter_delta = 0.01;
     let n_bins = 10;
-    let hist_min = 0.;
+    let hist_min  = 0.;
     let hist_max = 10.;
-    // compute the covariances for a frame/row
-    let compute_covariance = move |s: &mut [Series]| {
-
-        // define 2D histogram into which the values get filled
-        let mut hist = ndhistogram!(
-            Uniform::<f64>::new(n_bins, hist_min, hist_max),
-            Uniform::<f64>::new(n_bins, hist_min, hist_max)
-        );
-
-        let df = df!("col_cov"   => s[0].clone(),           // tof
-                                "col_mask1" => s[1].clone(),           // p_x
-                                "col_mask2" => s[2].clone()).unwrap(); // p_y
-        let df = df.sort(["col_cov"], false).unwrap();
-
-        // https://docs.rs/polars/0.26.1/polars/docs/eager/index.html#extracting-data
-        let ca = df.column("col_cov").unwrap().f64().unwrap();
-        let mut p2;
-        for (p1, xx) in ca.into_iter().enumerate() {
-            p2 = p1 + 1;
-            let x = xx.unwrap();
-            let filter1 = df.column("col_mask1").unwrap().f64().unwrap().get(p1).unwrap();
-            let filter2 = df.column("col_mask2").unwrap().f64().unwrap().get(p1).unwrap();
-            // filter data accordingly to the new x
-            let masked = df
-                .clone()
-                .lazy()
-                .slice(p2 as i64, df.height() as u32)
-                .filter(lit(filter1).add(col("col_mask1")).pow(2).lt(filter_delta)
-                   .and(lit(filter2).add(col("col_mask2")).pow(2).lt(filter_delta)) )
-                .select([col("col_cov")])
-                .collect()
-                .expect("Could filter col_mask");
-            let masked_col = masked.column("col_cov").unwrap().f64().unwrap();
-            for y in masked_col.into_iter() {
-                hist.fill(&(x, y.unwrap()));
+    
+    // define 2D histogram into which the values get filled
+    let mut hist = ndhistogram!(
+        Uniform::<f64>::new(n_bins, hist_min, hist_max),
+        Uniform::<f64>::new(n_bins, hist_min, hist_max)
+    );
+    let trigger_nrs = data.slice(s![..,0]).iter().map(|x| *x as i64).unique().collect_vec();
+    let num_triggers = trigger_nrs.len();
+    let num_cores = num_cpus::get() - 1;
+    for chunk_iter in trigger_nrs.chunks(3) {
+        //let mut data_chunk = Vec::<_>::with_capacity(1000);
+        // TODO: check this to make this nicer: https://docs.rs/ndarray/latest/ndarray/struct.ArrayBase.html#conversions-from-nested-vecsarrays
+        let chunk_vec = data
+            .axis_iter(Axis(0))
+            .into_iter()
+            .filter(|x| (x[0] >= *chunk_iter.first().unwrap() as f64) & (x[0] <= *chunk_iter.last().unwrap() as f64))
+            .flatten()
+            .collect_vec();
+        let data_chunk = Array::from_shape_vec((chunk_vec.len()/4, 4), chunk_vec).unwrap();
+        // push this into a ThreadPool
+        let trigger_nr = data_chunk.slice(s![..,0]).iter().map(|x| **x as i64).unique().collect_vec();
+        for i in trigger_nr {
+            let trigger_frame_vec = data_chunk
+                .axis_iter(Axis(0))
+                .into_iter()
+                .filter(|x| *x[0] == i as f64)
+                .flatten()
+                .collect_vec();
+            let trigger_frame = Array::from_shape_vec((trigger_frame_vec.len()/4, 4), trigger_frame_vec).unwrap();
+            for (p1, x) in trigger_frame.axis_iter(Axis(0)).enumerate() {
+                let p2 = p1 + 1;
+                let tof = *x[1];
+                let px = *x[2];
+                let py = *x[3];
+                let row = trigger_frame
+                    .slice(s![p2.., ..]);
+                let a = row
+                    .axis_iter(Axis(0))
+                    .into_iter()
+                    .filter(|&x| ((*x[2] + *px).powf(2.) < 0.01) & ((*x[3] + *py).powf(2.) < 0.01))
+                    .map(|x| x[1])
+                    .collect_vec();
+                for y in a {
+                    hist.fill(&(*tof, **y));
+                }
             }
         }
-
-        let a = hist.values().map(|v| *v).collect::<Vec<f64>>();
-        Ok(Series::from_vec("hist", a))
-    };
-
-    // group df according to 'trigger nr' and calculate covariance for the frames
-    let grouped = df
-        .lazy()
-        .groupby([col_grp])
-        .agg([apply_multiple(
-            compute_covariance,
-            [col(col_pipico), col(col_mask1), col(col_mask2)],
-            GetOutput::from_type(DataType::Float64),
-            false,
-        ).alias("histogram")])
-        .select([col("histogram")])
-        .collect()
-        .expect("msg");
-    let number_groups = grouped.height();
-   
-    // convert histogram we retrieve for every group into a single 2D histo
-    let a = grouped.explode(["histogram"]).unwrap();
-    let ca = a.column("histogram").unwrap().f64().unwrap();
-    let to_vec = ca.into_iter().map(|f| 
-        match f {
-            None => panic!("convert to vec: None"),
-            Some(x) => x
-        }).collect::<Vec<f64>>();
-    let a_hist = Array1::from_iter(to_vec.into_iter())
-        .into_shape((number_groups, (n_bins + 2).pow(2)))
-        .unwrap()
-        .sum_axis(Axis(0))
+        //let b = Array::from_vec(a.fl);
+        //dbg!();
+    }
+       
+    let a_hist: Array2<f64> = Array1::from_iter(hist.values().map(|v| *v).into_iter())
         .into_shape((n_bins + 2, n_bins + 2))
         .unwrap();
- 
-    //Ok(a_hist
-    //        .slice(s![1..n_bins + 1, 1..n_bins + 1]).to_vec())
-    vec![1., 2., 3.]
 
-    //Ok(PyDataFrame(df))
+    a_hist
+        .slice(s![1..n_bins + 1, 1..n_bins + 1])
+        .to_owned()
 }
-

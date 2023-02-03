@@ -135,8 +135,8 @@ def test_pipico_polars_filter_momentum_simulated():
     #    pd.DataFrame(pd.read_feather('test_data.feather'), columns=['trigger nr', 'tof', 'px', 'py']))
     # simulate data
     n_bins = 10
-    n_shots = 1_000
-    n_parts = 50
+    n_shots = 5_000
+    n_parts = 100
 
     tof_min = 0
     tof_max = 10
