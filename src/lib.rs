@@ -279,6 +279,8 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         hist_max: f64,
     //) -> PyResult<PyDataFrame> {
     ) -> PyResult<&'py PyArray2<f64>> {
+        // x = [trigger nr, mz / tof, px, py] = 4 columns
+        // need to get index in here as well, because I want to return the index of the pairs
         let data = x.as_array();
         
         // define 2D histogram into which the values get filled
@@ -292,22 +294,29 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         for chunk_iter in trigger_nrs.chunks(3) {
             //let mut data_chunk = Vec::<_>::with_capacity(1000);
             // TODO: check this to make this nicer: https://docs.rs/ndarray/latest/ndarray/struct.ArrayBase.html#conversions-from-nested-vecsarrays
+            // poor mans group-by along trigger nr (0 column)
+            // check https://doc.rust-lang.org/nightly/core/iter/trait.Iterator.html#method.position maybe that's a better solution
             let chunk_vec = data
                 .axis_iter(Axis(0))
                 .into_iter()
+                // maybe something like a 'df.query(`trigger nr` in @triggers)', 
+                // but as 'trigger nr' needs to be sorted in the first place it probably doesn't matter
                 .filter(|x| (x[0] >= *chunk_iter.first().unwrap() as f64) & (x[0] <= *chunk_iter.last().unwrap() as f64))
                 .flatten()
                 .collect_vec();
+            // convert the flattened groupby back into a 2D array with 4 columns
             let data_chunk = Array::from_shape_vec((chunk_vec.len()/4, 4), chunk_vec).unwrap();
             // push this into a ThreadPool
             let trigger_nr = data_chunk.slice(s![..,0]).iter().map(|x| **x as i64).unique().collect_vec();
             for i in trigger_nr {
+                // is it possible to only get the indices for the trigger nr in question and create a view on that slice?
                 let trigger_frame_vec = data_chunk
                     .axis_iter(Axis(0))
                     .into_iter()
                     .filter(|x| *x[0] == i as f64)
                     .flatten()
                     .collect_vec();
+                // same like above, is there a faster way?
                 let trigger_frame = Array::from_shape_vec((trigger_frame_vec.len()/4, 4), trigger_frame_vec).unwrap();
                 for (p1, x) in trigger_frame.axis_iter(Axis(0)).enumerate() {
                     let p2 = p1 + 1;
@@ -324,6 +333,7 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
                         .collect_vec();
                     for y in a {
                         hist.fill(&(*tof, **y));
+                        // collect pairs
                     }
                 }
             }

@@ -1,4 +1,6 @@
 
+// cargo flamegraph --root --bench my_benchmark -- --bench
+
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use pipico::polars_filter_momentum_bench;
 
