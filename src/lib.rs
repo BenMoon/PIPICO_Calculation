@@ -10,16 +10,16 @@ use ndarray::parallel::prelude::*;
 use ndarray_rand::rand_distr::num_traits::ToPrimitive;
 use ndhistogram::{axis::Uniform, ndhistogram, Histogram};
 use numpy::{PyArray2, PyReadonlyArray2, ToPyArray};
-use polars::export::arrow::compute::filter;
-use polars::lazy::dsl::apply_multiple;
+//use polars::export::arrow::compute::filter;
+//use polars::lazy::dsl::apply_multiple;
 use pyo3::{pymodule, types::PyModule, PyResult, Python};
 extern crate num_cpus;
 
-use polars::prelude::*;
-use pyo3_polars::error::PyPolarsErr;
-use pyo3_polars::PyDataFrame;
+//use polars::prelude::*;
+//use pyo3_polars::error::PyPolarsErr;
+//use pyo3_polars::PyDataFrame;
 
-use rayon::prelude::*;
+//use rayon::prelude::*;
 
 /// calculate a covariance map
 #[pymodule]
@@ -29,6 +29,7 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     /// nbins: number of bins for map
     /// min: histogram min
     /// max: histogram max
+    /*
     #[pyfn(m)]
     fn pipico_equal_size<'py>(
         py: Python<'py>,
@@ -84,12 +85,14 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
             .slice(s![1..n_bins + 1, 1..n_bins + 1])
             .to_pyarray(py))
     }
+    */
 
     /// calculate a covariance map
     /// x: list of lists with a ToF trace in every row, pre-sorting not required
     /// nbins: number of bins for map
     /// min: histogram min
     /// max: histogram max
+    /*
     #[pyfn(m)]
     fn pipico_lists<'py>(
         py: Python<'py>,
@@ -155,6 +158,7 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         //let dummy = Array::<f64,_>::zeros((10, 10));
         //Ok(dummy.into_pyarray(py))
     }
+    */
 
     /// calculate a covariance map
     /// pydf: polars dataframe containing the data to compute
@@ -165,6 +169,7 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     /// nbins: number of bins for map
     /// min: histogram min
     /// max: histogram max
+    /*
     #[pyfn(m)]
     fn polars_filter_momentum_pl<'py>(
         py: Python<'py>,
@@ -259,6 +264,7 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
 
         //Ok(PyDataFrame(df))
     }
+    */
     
     /// calculate a covariance map
     /// pydf: polars dataframe containing the data to compute
@@ -282,16 +288,22 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         // x = [trigger nr, mz / tof, px, py] = 4 columns
         // need to get index in here as well, because I want to return the index of the pairs
         let data = x.as_array();
+        let data_trigger = data.column(0);
+        let data_tof = data.column(1);
+        let data_px = data.column(2);
+        let data_py = data.column(3);
         
         // define 2D histogram into which the values get filled
         let mut hist = ndhistogram!(
             Uniform::<f64>::new(n_bins, hist_min, hist_max),
             Uniform::<f64>::new(n_bins, hist_min, hist_max)
         );
-        let trigger_nrs = data.slice(s![..,0]).iter().map(|x| *x as i64).unique().collect_vec();
+        let trigger_nrs = data_trigger.iter().map(|x| *x as i64).unique().collect_vec();
         let num_triggers = trigger_nrs.len();
         let num_cores = num_cpus::get() - 1;
-        for chunk_iter in trigger_nrs.chunks(3) {
+        // makes the chunk to process n big, does not generate n chunks
+        // chunk_iter = [[1,2,3], [4,5,6]]
+        for chunk_iter in trigger_nrs.chunks(5) {
             //let mut data_chunk = Vec::<_>::with_capacity(1000);
             // TODO: check this to make this nicer: https://docs.rs/ndarray/latest/ndarray/struct.ArrayBase.html#conversions-from-nested-vecsarrays
             // poor mans group-by along trigger nr (0 column)
@@ -350,12 +362,20 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
             .to_pyarray(py))
     }
 
+    #[pyfn(m)]
+    fn hallo<'py>(
+            py: Python<'py>,
+            num: i64
+        ) {
+        println!("hallo {:?}", num);
+    }
     
 
     Ok(())
 }
 
-pub  fn polars_filter_momentum_bench(
+// data needs to be sorted along triggers
+pub fn polars_filter_momentum_bench(
     data: Array2<f64>,
 //) -> PyResult<PyDataFrame> {
 ) -> Array2<f64> {
@@ -364,35 +384,71 @@ pub  fn polars_filter_momentum_bench(
     let n_bins = 10;
     let hist_min  = 0.;
     let hist_max = 10.;
-    
+
+    let data_trigger = data.column(0);
+    let data_tof = data.column(1);
+    let data_px = data.column(2);
+    let data_py = data.column(3); 
     // define 2D histogram into which the values get filled
     let mut hist = ndhistogram!(
         Uniform::<f64>::new(n_bins, hist_min, hist_max),
         Uniform::<f64>::new(n_bins, hist_min, hist_max)
     );
-    let trigger_nrs = data.slice(s![..,0]).iter().map(|x| *x as i64).unique().collect_vec();
+    //let trigger_nrs = data.slice(s![..,0]).iter().map(|x| *x as i64).unique().collect_vec();
+    let trigger_nrs = data_trigger.iter().map(|x| *x as i64).unique().collect_vec();
     let num_triggers = trigger_nrs.len();
     let num_cores = num_cpus::get() - 1;
-    for chunk_iter in trigger_nrs.chunks(3) {
+
+    // iterate over chunks, the computation of a chunk should be pushed into a thread
+    // chunks are defined as group of triggers, the size is determined by the number of CPU cores
+    // chunksize determines the size of the chunk, so if we want to unload all data evenly onto the cores
+    // we need to do `num_trigger / num_cores`
+    // `chunk_triggers` will contain the trigger number which belong to a chunk
+    for chunk_triggers in trigger_nrs.chunks(num_triggers / num_cores) {
         //let mut data_chunk = Vec::<_>::with_capacity(1000);
         // TODO: check this to make this nicer: https://docs.rs/ndarray/latest/ndarray/struct.ArrayBase.html#conversions-from-nested-vecsarrays
+        // collect all data which belong to a chunk in a "DataFrame"
+        
+        
         let chunk_vec = data
             .axis_iter(Axis(0))
             .into_iter()
-            .filter(|x| (x[0] >= *chunk_iter.first().unwrap() as f64) & (x[0] <= *chunk_iter.last().unwrap() as f64))
+            .filter(|x| (x[0] >= *chunk_triggers.first().unwrap() as f64) & (x[0] <= *chunk_triggers.last().unwrap() as f64))
             .flatten()
             .collect_vec();
-        let data_chunk = Array::from_shape_vec((chunk_vec.len()/4, 4), chunk_vec).unwrap();
+        // collect all indices which belong to one chunk
+        let data_chunk = Array::from_shape_vec((chunk_vec.len()/data.ncols(), data.ncols()), chunk_vec).unwrap();
+        
+
+        // get only indices which belong to a group, something like
+        // `df.query('trigger in @chunk_triggers')`
+        // provides the index of the trigger numbers which belong in this chunk
+        // didn't work, because I cannot access the arrayview providing an list of indices
+        // because the trigger numbers are sorted, the index of the trigger numbers should be increasing
+        // and such something like s![idx[0]..idx[-1]] should work
+        /*
+        let idx = chunk_triggers
+            .iter()
+            .map(|i| data_trigger.iter().positions(|v| *v as i64== *i).collect::<Vec<_>>())
+            .flatten()
+            .collect::<Vec<_>>();
+        //dbg!(&idx);
+        //let a = idx.iter().map(|i| data_trigger[i]).collect::<Vec<_>>();
+        let a = idx.iter().map(|i| data_tof[*i]).collect_vec();
+        dbg!(chunk_triggers);
+         */
+
         // push this into a ThreadPool
-        let trigger_nr = data_chunk.slice(s![..,0]).iter().map(|x| **x as i64).unique().collect_vec();
-        for i in trigger_nr {
+        //let trigger_nr = data_chunk.slice(s![..,0]).iter().map(|x| **x as i64).unique().collect_vec();
+        //dbg!(trigger_nr);
+        for i in chunk_triggers {
             let trigger_frame_vec = data_chunk
                 .axis_iter(Axis(0))
                 .into_iter()
-                .filter(|x| *x[0] == i as f64)
+                .filter(|x| *x[0] == *i as f64)
                 .flatten()
                 .collect_vec();
-            let trigger_frame = Array::from_shape_vec((trigger_frame_vec.len()/4, 4), trigger_frame_vec).unwrap();
+            let trigger_frame = Array::from_shape_vec((trigger_frame_vec.len()/data.ncols(), data.ncols()), trigger_frame_vec).unwrap();
             for (p1, x) in trigger_frame.axis_iter(Axis(0)).enumerate() {
                 let p2 = p1 + 1;
                 let tof = *x[1];
@@ -400,16 +456,18 @@ pub  fn polars_filter_momentum_bench(
                 let py = *x[3];
                 let row = trigger_frame
                     .slice(s![p2.., ..]);
+
+                //mask = [(row_px[p2:] + px)**2 + (row_py[p2:] + py)**2 + (row_pz[p2:] + pz)**2 < (px**2 + py**2 + pz**2)*0.00025]
                 let a = row
                     .axis_iter(Axis(0))
                     .into_iter()
-                    .filter(|&x| ((*x[2] + *px).powf(2.) < 0.01) & ((*x[3] + *py).powf(2.) < 0.01))
+                    .filter(|&x| ((*x[2] + *px).powf(2.) + (*x[3] + *py).powf(2.)) < (*px**px + *py**py)*0.00025)
                     .map(|x| x[1])
                     .collect_vec();
                 for y in a {
                     hist.fill(&(*tof, **y));
                 }
-            }
+            } 
         }
         //let b = Array::from_vec(a.fl);
         //dbg!();
@@ -423,3 +481,4 @@ pub  fn polars_filter_momentum_bench(
         .slice(s![1..n_bins + 1, 1..n_bins + 1])
         .to_owned()
 }
+

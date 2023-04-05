@@ -18,11 +18,11 @@ noisy_float = "0.2.0"
 itertools = "0.10.3"
 rand = "0.8.5"
 ndarray-rand = "0.14.0"
-pyo3 = { version = "0.17.3", features = ["extension-module"] }
+pyo3 = { version = "0.18", features = ["extension-module"] }
 numpy = "*"
-rayon = "1.6.1"
-polars = {version="0.26.1", features = ["lazy", "parquet", "ndarray"]}
-pyo3-polars = {version = "*"}
+#rayon = "1.6.1"
+polars = {version="0.28.0", features = ["lazy", "parquet", "ndarray"]}
+#pyo3-polars = {version = "*"}
 num_cpus = "*"
 
 [build-dependencies]

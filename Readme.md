@@ -49,3 +49,6 @@ unlike [numpy](https://numpy.org/doc/stable/reference/generated/numpy.histogram.
 > `[1, 2, 3, 4]`
 >
 > then the first bin is `[1, 2)` (including 1, but excluding 2) and the second `[2, 3)`. The last bin, however, is `[3, 4]`, which includes 4.
+
+# run benchmarks
+`cargo flamegraph -o benches/flamegraph.svg --root --bench my_benchmark -- --bench`
