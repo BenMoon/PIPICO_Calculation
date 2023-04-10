@@ -20,8 +20,8 @@ rand = "0.8.5"
 ndarray-rand = "0.14.0"
 pyo3 = { version = "0.18", features = ["extension-module"] }
 numpy = "*"
-#rayon = "1.6.1"
-polars = {version="0.28.0", features = ["lazy", "parquet", "ndarray"]}
+rayon = "1.7"
+polars = {version="0.28", features = ["lazy", "parquet", "ndarray"]}
 #pyo3-polars = {version = "*"}
 num_cpus = "*"
 

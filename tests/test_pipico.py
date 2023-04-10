@@ -145,6 +145,7 @@ def test_pipico_polars_filter_momentum_simulated():
     df = pl.from_pandas(df)
     da = df.to_numpy()
 
+    '''
     start = time.time()
     hist_pl = pipico.polars_filter_momentum_pl(
         pydf=df[["trigger nr", "tof", "px", "py"]],
@@ -161,6 +162,7 @@ def test_pipico_polars_filter_momentum_simulated():
     #print(f"Rust polars took: {stop - start} s")
     #print("Rust")
     #print(hist_pl)
+    '''
 
     start = time.time()
     hist_np = pipico.polars_filter_momentum_np(
@@ -168,13 +170,13 @@ def test_pipico_polars_filter_momentum_simulated():
     )
     stop = time.time()
     print(f"Rust numpy took: {stop - start} s")
+    print(hist_np)
 
     start = time.time()
     hist_py = filter_cov_py(data_tof, data_px, data_py, n_bins, tof_min, tof_max)
     stop = time.time()
     print(f"Python took: {stop - start} s")
-    #print("Python:")
-    #print(hist_py)
+    print(hist_py)
 
     #print("difference:")
     #print(hist_pl - hist_py)

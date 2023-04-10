@@ -1,12 +1,15 @@
 #![feature(iter_collect_into)]
 
-use std::usize;
+use pyo3::ffi::PyImport_ImportModuleEx;
+use rand::rngs::ThreadRng;
+use rand::{self, Rng};
 use std::ops::Add;
+use std::usize;
 
-use itertools::Itertools;
-use ndarray::{s, Array1, Array2, Data};
-use ndarray::prelude::*;
+use itertools::{Itertools, izip};
 use ndarray::parallel::prelude::*;
+use ndarray::prelude::*;
+use ndarray::{s, Array1, Array2, Data};
 use ndarray_rand::rand_distr::num_traits::ToPrimitive;
 use ndhistogram::{axis::Uniform, ndhistogram, Histogram};
 use numpy::{PyArray2, PyReadonlyArray2, ToPyArray};
@@ -19,7 +22,7 @@ extern crate num_cpus;
 //use pyo3_polars::error::PyPolarsErr;
 //use pyo3_polars::PyDataFrame;
 
-//use rayon::prelude::*;
+use rayon::prelude::*;
 
 /// calculate a covariance map
 #[pymodule]
@@ -194,7 +197,7 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
                 Uniform::<f64>::new(n_bins, hist_min, hist_max),
                 Uniform::<f64>::new(n_bins, hist_min, hist_max)
             );
-    
+
             let df = df!("col_cov"   => s[0].clone(),           // tof
                                     "col_mask1" => s[1].clone(),           // p_x
                                     "col_mask2" => s[2].clone()).unwrap(); // p_y
@@ -242,11 +245,11 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
             .collect()
             .expect("msg");
         let number_groups = grouped.height();
-       
+
         // convert histogram we retrieve for every group into a single 2D histo
         let a = grouped.explode(["histogram"]).unwrap();
         let ca = a.column("histogram").unwrap().f64().unwrap();
-        let to_vec = ca.into_iter().map(|f| 
+        let to_vec = ca.into_iter().map(|f|
             match f {
                 None => panic!("convert to vec: None"),
                 Some(x) => x
@@ -257,7 +260,7 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
             .sum_axis(Axis(0))
             .into_shape((n_bins + 2, n_bins + 2))
             .unwrap();
-       
+
         Ok(a_hist
             .slice(s![1..n_bins + 1, 1..n_bins + 1])
             .to_pyarray(py))
@@ -265,7 +268,7 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         //Ok(PyDataFrame(df))
     }
     */
-    
+
     /// calculate a covariance map
     /// pydf: polars dataframe containing the data to compute
     /// col_grp: column name over which to perform the groupby
@@ -283,7 +286,7 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         n_bins: usize,
         hist_min: f64,
         hist_max: f64,
-    //) -> PyResult<PyDataFrame> {
+        //) -> PyResult<PyDataFrame> {
     ) -> PyResult<&'py PyArray2<f64>> {
         // x = [trigger nr, mz / tof, px, py] = 4 columns
         // need to get index in here as well, because I want to return the index of the pairs
@@ -292,13 +295,17 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         let data_tof = data.column(1);
         let data_px = data.column(2);
         let data_py = data.column(3);
-        
+
         // define 2D histogram into which the values get filled
         let mut hist = ndhistogram!(
             Uniform::<f64>::new(n_bins, hist_min, hist_max),
             Uniform::<f64>::new(n_bins, hist_min, hist_max)
         );
-        let trigger_nrs = data_trigger.iter().map(|x| *x as i64).unique().collect_vec();
+        let trigger_nrs = data_trigger
+            .iter()
+            .map(|x| *x as i64)
+            .unique()
+            .collect_vec();
         let num_triggers = trigger_nrs.len();
         let num_cores = num_cpus::get() - 1;
         // makes the chunk to process n big, does not generate n chunks
@@ -311,15 +318,23 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
             let chunk_vec = data
                 .axis_iter(Axis(0))
                 .into_iter()
-                // maybe something like a 'df.query(`trigger nr` in @triggers)', 
+                // maybe something like a 'df.query(`trigger nr` in @triggers)',
                 // but as 'trigger nr' needs to be sorted in the first place it probably doesn't matter
-                .filter(|x| (x[0] >= *chunk_iter.first().unwrap() as f64) & (x[0] <= *chunk_iter.last().unwrap() as f64))
+                .filter(|x| {
+                    (x[0] >= *chunk_iter.first().unwrap() as f64)
+                        & (x[0] <= *chunk_iter.last().unwrap() as f64)
+                })
                 .flatten()
                 .collect_vec();
             // convert the flattened groupby back into a 2D array with 4 columns
-            let data_chunk = Array::from_shape_vec((chunk_vec.len()/4, 4), chunk_vec).unwrap();
+            let data_chunk = Array::from_shape_vec((chunk_vec.len() / 4, 4), chunk_vec).unwrap();
             // push this into a ThreadPool
-            let trigger_nr = data_chunk.slice(s![..,0]).iter().map(|x| **x as i64).unique().collect_vec();
+            let trigger_nr = data_chunk
+                .slice(s![.., 0])
+                .iter()
+                .map(|x| **x as i64)
+                .unique()
+                .collect_vec();
             for i in trigger_nr {
                 // is it possible to only get the indices for the trigger nr in question and create a view on that slice?
                 let trigger_frame_vec = data_chunk
@@ -329,14 +344,15 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
                     .flatten()
                     .collect_vec();
                 // same like above, is there a faster way?
-                let trigger_frame = Array::from_shape_vec((trigger_frame_vec.len()/4, 4), trigger_frame_vec).unwrap();
+                let trigger_frame =
+                    Array::from_shape_vec((trigger_frame_vec.len() / 4, 4), trigger_frame_vec)
+                        .unwrap();
                 for (p1, x) in trigger_frame.axis_iter(Axis(0)).enumerate() {
                     let p2 = p1 + 1;
                     let tof = *x[1];
                     let px = *x[2];
                     let py = *x[3];
-                    let row = trigger_frame
-                        .slice(s![p2.., ..]);
+                    let row = trigger_frame.slice(s![p2.., ..]);
                     let a = row
                         .axis_iter(Axis(0))
                         .into_iter()
@@ -352,7 +368,7 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
             //let b = Array::from_vec(a.fl);
             //dbg!();
         }
-           
+
         let a_hist: Array2<f64> = Array1::from_iter(hist.values().map(|v| *v).into_iter())
             .into_shape((n_bins + 2, n_bins + 2))
             .unwrap();
@@ -363,13 +379,9 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     }
 
     #[pyfn(m)]
-    fn hallo<'py>(
-            py: Python<'py>,
-            num: i64
-        ) {
+    fn hallo<'py>(py: Python<'py>, num: i64) {
         println!("hallo {:?}", num);
     }
-    
 
     Ok(())
 }
@@ -502,56 +514,113 @@ pub fn polars_filter_momentum_bench_idx(
 
     a_hist.slice(s![1..n_bins + 1, 1..n_bins + 1]).to_owned()
 }
-            .map(|i| data_trigger.iter().positions(|v| *v as i64== *i).collect::<Vec<_>>())
+
+// data needs to be sorted along triggers
+// this should already work
+// works with 2D array
+pub fn polars_filter_momentum_bench_2D(
+    data: Array2<f64>,
+    //) -> PyResult<PyDataFrame> {
+) -> Array2<f64> {
+    let filter_delta = 0.01;
+    let n_bins = 10;
+    let hist_min = 0.;
+    let hist_max = 10.;
+
+    let data_trigger = data.column(0);
+    let data_tof = data.column(1);
+    let data_px = data.column(2);
+    let data_py = data.column(3);
+    // define 2D histogram into which the values get filled
+    let mut hist = ndhistogram!(
+        Uniform::<f64>::new(n_bins, hist_min, hist_max),
+        Uniform::<f64>::new(n_bins, hist_min, hist_max)
+    );
+    //let trigger_nrs = data.slice(s![..,0]).iter().map(|x| *x as i64).unique().collect_vec();
+    let trigger_nrs = data_trigger
+        .iter()
+        .map(|x| *x as i64)
+        .unique()
+        .collect_vec();
+    let num_triggers = trigger_nrs.len();
+    let num_cores = num_cpus::get() - 1;
+
+    // iterate over chunks, the computation of a chunk should be pushed into a thread
+    // chunks are defined as group of triggers, the size is determined by the number of CPU cores
+    // chunksize determines the size of the chunk, so if we want to unload all data evenly onto the cores
+    // we need to do `num_trigger / num_cores`
+    // `chunk_triggers` will contain the trigger number which belong to a chunk
+    for chunk_triggers in trigger_nrs.chunks(num_triggers / num_cores) {
+        //let mut data_chunk = Vec::<_>::with_capacity(1000);
+        // TODO: check this to make this nicer: https://docs.rs/ndarray/latest/ndarray/struct.ArrayBase.html#conversions-from-nested-vecsarrays
+        // collect all data which belong to a chunk in a "DataFrame"
+        let chunk_vec = data
+            .axis_iter(Axis(0))
+            .into_iter()
+            .filter(|x| {
+                (x[0] >= *chunk_triggers.first().unwrap() as f64)
+                    & (x[0] <= *chunk_triggers.last().unwrap() as f64)
+            })
             .flatten()
-            .collect::<Vec<_>>();
-        //dbg!(&idx);
-        //let a = idx.iter().map(|i| data_trigger[i]).collect::<Vec<_>>();
-        let a = idx.iter().map(|i| data_tof[*i]).collect_vec();
-        dbg!(chunk_triggers);
-         */
+            .collect_vec();
+        // collect all indices which belong to one chunk
+        let data_chunk =
+            Array::from_shape_vec((chunk_vec.len() / data.ncols(), data.ncols()), chunk_vec)
+                .unwrap();
+
+        // inititalise random number generator
+        let mut rng = rand::thread_rng();
+        let distribution = rand::distributions::Uniform::new(0, data_trigger.len());
 
         // push this into a ThreadPool
-        //let trigger_nr = data_chunk.slice(s![..,0]).iter().map(|x| **x as i64).unique().collect_vec();
+        /*
+        let trigger_nr = data_chunk
+            .slice(s![.., 0])
+            .iter()
+            .map(|x| **x as i64)
+            .unique()
+            .collect_vec();
+         */
         //dbg!(trigger_nr);
-        for i in chunk_triggers {
+        for trg_nr in chunk_triggers {
             let trigger_frame_vec = data_chunk
                 .axis_iter(Axis(0))
                 .into_iter()
-                .filter(|x| *x[0] == *i as f64)
+                .filter(|x| *x[0] == *trg_nr as f64)
                 .flatten()
                 .collect_vec();
-            let trigger_frame = Array::from_shape_vec((trigger_frame_vec.len()/data.ncols(), data.ncols()), trigger_frame_vec).unwrap();
+            let trigger_frame = Array::from_shape_vec(
+                (trigger_frame_vec.len() / data.ncols(), data.ncols()),
+                trigger_frame_vec,
+            )
+            .unwrap();
+
             for (p1, x) in trigger_frame.axis_iter(Axis(0)).enumerate() {
                 let p2 = p1 + 1;
-                let tof = *x[1];
+                let tof_x = *x[1];
                 let px = *x[2];
                 let py = *x[3];
-                let row = trigger_frame
-                    .slice(s![p2.., ..]);
 
-                //mask = [(row_px[p2:] + px)**2 + (row_py[p2:] + py)**2 + (row_pz[p2:] + pz)**2 < (px**2 + py**2 + pz**2)*0.00025]
+                let row = trigger_frame.slice(s![p2.., ..]);
                 let a = row
                     .axis_iter(Axis(0))
                     .into_iter()
-                    .filter(|&x| ((*x[2] + *px).powf(2.) + (*x[3] + *py).powf(2.)) < (*px**px + *py**py)*0.00025)
+                    .filter(|&x| ((*x[2] + *px).powf(2.) + (*x[3] + *py).powf(2.)) < (*px * *px + *py * *py) * 0.00025)
                     .map(|x| x[1])
                     .collect_vec();
-                for y in a {
-                    hist.fill(&(*tof, **y));
+
+                for tof_y in a {
+                    hist.fill(&(*tof_x, **tof_y));
                 }
-            } 
+            }
         }
         //let b = Array::from_vec(a.fl);
         //dbg!();
     }
-       
+
     let a_hist: Array2<f64> = Array1::from_iter(hist.values().map(|v| *v).into_iter())
         .into_shape((n_bins + 2, n_bins + 2))
         .unwrap();
 
-    a_hist
-        .slice(s![1..n_bins + 1, 1..n_bins + 1])
-        .to_owned()
+    a_hist.slice(s![1..n_bins + 1, 1..n_bins + 1]).to_owned()
 }
-
