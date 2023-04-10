@@ -374,6 +374,27 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     Ok(())
 }
 
+/// generate array of random numbers and check if none are double with reference list
+///
+pub fn get_bg_idx(rng: &mut ThreadRng) {
+    let distribution = rand::distributions::Uniform::new(0, 1_000);
+    let ref_data = (100..200).into_iter().collect_vec();
+    dbg!(ref_data);
+
+    let mut idx_bg = (rng)
+        .sample_iter(distribution)
+        .take(100)
+        .collect::<Vec<_>>();
+    /*
+    let idx_bg = (0..100)
+        .into_iter()
+        .map(|| {
+            while let x = rng.gen_range(0..1_000);
+
+        });
+     */
+}
+
 // data needs to be sorted along triggers
 pub fn polars_filter_momentum_bench(
     data: Array2<f64>,
