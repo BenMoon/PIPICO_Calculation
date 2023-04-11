@@ -37,6 +37,6 @@ pub fn criterion_get_bg_idx(c: &mut Criterion) {
     });
 }
 
-//criterion_group!(benches, criterion_get_bg_idx);
-criterion_group!(benches, criterion_benchmark);
+criterion_group!(benches, criterion_get_bg_idx);
+//criterion_group!(benches, criterion_benchmark);
 criterion_main!(benches);

@@ -105,8 +105,8 @@ fn main() {
     let c = pipico::polars_filter_momentum_bench_idx(a.clone());
     dbg!(c);
 
-    //let mut rng = rand::thread_rng();
-    //pipico::get_bg_idx(&mut rng);
+    let mut rng = rand::thread_rng();
+    pipico::get_bg_idx(&mut rng);
     //pipico::get_bg_idx(rng);
 
 
