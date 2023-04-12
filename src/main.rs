@@ -98,12 +98,14 @@ fn main() {
 
     let a = df.select(["trigger nr", "tof", "px", "py"]).unwrap().to_ndarray::<Float64Type>().unwrap();
     pipico::polars_filter_momentum_bench_idx(a.clone());
+    //dbg!(a);
 
-    let b = pipico::polars_filter_momentum_bench_2D(a.clone());
-    dbg!(b);
+    let b = pipico::ndarray_filter_momentum_bench_2D(a.clone());
+    //dbg!(b);
+    println!("{:?}", b);
 
-    let c = pipico::polars_filter_momentum_bench_idx(a.clone());
-    dbg!(c);
+    //let c = pipico::polars_filter_momentum_bench_idx(a.clone());
+    //dbg!(c);
 
     let mut rng = rand::thread_rng();
     pipico::get_bg_idx(&mut rng);

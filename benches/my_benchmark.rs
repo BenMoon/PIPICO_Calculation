@@ -21,22 +21,21 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         .to_ndarray::<Float64Type>()
         .unwrap();
     c.bench_function("numpy 2D array", |b| {
-        b.iter(|| pipico::polars_filter_momentum_bench_2D(black_box(a.clone())))
+        b.iter(|| pipico::ndarray_filter_momentum_bench_2D(black_box(a.clone())))
     });
-    c.bench_function("numpy index", |b| {
-        b.iter(|| pipico::polars_filter_momentum_bench_idx(black_box(a.clone())))
-    });
+    //c.bench_function("numpy index", |b| {
+    //    b.iter(|| pipico::polars_filter_momentum_bench_idx(black_box(a.clone())))
+    //});
 }
 
 // benchmark get background with index
 pub fn criterion_get_bg_idx(c: &mut Criterion) {
     let mut rng = rand::thread_rng();
 
-    c.bench_function("for loop comparison", |b| {
+    c.bench_function("gen bg: for loop comparison", |b| {
         b.iter(|| pipico::get_bg_idx(black_box(&mut rng)))
     });
 }
 
-criterion_group!(benches, criterion_get_bg_idx);
-//criterion_group!(benches, criterion_benchmark);
+criterion_group!(benches, criterion_get_bg_idx, criterion_benchmark);
 criterion_main!(benches);

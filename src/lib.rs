@@ -6,7 +6,7 @@ use rand::{self, Rng};
 use std::ops::Add;
 use std::usize;
 
-use itertools::{Itertools, izip};
+use itertools::{izip, Itertools};
 use ndarray::parallel::prelude::*;
 use ndarray::prelude::*;
 use ndarray::{s, Array1, Array2, Data};
@@ -356,7 +356,9 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
                     let a = row
                         .axis_iter(Axis(0))
                         .into_iter()
-                        .filter(|&x| ((*x[2] + *px).powf(2.) < 0.01) & ((*x[3] + *py).powf(2.) < 0.01))
+                        .filter(|&x| {
+                            ((*x[2] + *px).powf(2.) < 0.01) & ((*x[3] + *py).powf(2.) < 0.01)
+                        })
                         .map(|x| x[1])
                         .collect_vec();
                     for y in a {
@@ -491,11 +493,18 @@ pub fn polars_filter_momentum_bench_idx(
                 let px = data_px[p1];
                 let py = data_py[p1];
 
-                let row = izip!(data_tof.slice(s![p2..]), data_px.slice(s![p2..]), data_py.slice(s![p2..]))
-                    .into_iter()
-                    .filter(|&(_, p2_px, p2_py)| ((*p2_px + px).powf(2.) + (*p2_py + py).powf(2.)) < (px * px + py * py) * 0.00025)
-                    .map(|(&p2_tof, _, _)| p2_tof)
-                    .collect_vec();
+                let row = izip!(
+                    data_tof.slice(s![p2..]),
+                    data_px.slice(s![p2..]),
+                    data_py.slice(s![p2..])
+                )
+                .into_iter()
+                .filter(|&(_, p2_px, p2_py)| {
+                    ((*p2_px + px).powf(2.) + (*p2_py + py).powf(2.))
+                        < (px * px + py * py) * 0.00025
+                })
+                .map(|(&p2_tof, _, _)| p2_tof)
+                .collect_vec();
                 for tof_y in row {
                     hist.fill(&(tof_x, tof_y));
                 }
@@ -515,7 +524,7 @@ pub fn polars_filter_momentum_bench_idx(
 // data needs to be sorted along triggers
 // this should already work
 // works with 2D array
-pub fn polars_filter_momentum_bench_2D(
+pub fn ndarray_filter_momentum_bench_2D(
     data: Array2<f64>,
     //) -> PyResult<PyDataFrame> {
 ) -> Array2<f64> {
@@ -528,11 +537,7 @@ pub fn polars_filter_momentum_bench_2D(
     let data_tof = data.column(1);
     let data_px = data.column(2);
     let data_py = data.column(3);
-    // define 2D histogram into which the values get filled
-    let mut hist = ndhistogram!(
-        Uniform::<f64>::new(n_bins, hist_min, hist_max),
-        Uniform::<f64>::new(n_bins, hist_min, hist_max)
-    );
+
     //let trigger_nrs = data.slice(s![..,0]).iter().map(|x| *x as i64).unique().collect_vec();
     let trigger_nrs = data_trigger
         .iter()
@@ -542,6 +547,10 @@ pub fn polars_filter_momentum_bench_2D(
     let num_triggers = trigger_nrs.len();
     let num_cores = num_cpus::get() - 1;
 
+    let mut cov_hist = ndhistogram!(
+        Uniform::<f64>::new(n_bins, hist_min, hist_max),
+        Uniform::<f64>::new(n_bins, hist_min, hist_max)
+    );
     // iterate over chunks, the computation of a chunk should be pushed into a thread
     // chunks are defined as group of triggers, the size is determined by the number of CPU cores
     // chunksize determines the size of the chunk, so if we want to unload all data evenly onto the cores
@@ -560,7 +569,7 @@ pub fn polars_filter_momentum_bench_2D(
             })
             .flatten()
             .collect_vec();
-        // collect all indices which belong to one chunk
+        // collect all data which belong to one chunk
         let data_chunk =
             Array::from_shape_vec((chunk_vec.len() / data.ncols(), data.ncols()), chunk_vec)
                 .unwrap();
@@ -569,7 +578,6 @@ pub fn polars_filter_momentum_bench_2D(
         let mut rng = rand::thread_rng();
         let distribution = rand::distributions::Uniform::new(0, data_trigger.len());
 
-        // push this into a ThreadPool
         /*
         let trigger_nr = data_chunk
             .slice(s![.., 0])
@@ -579,43 +587,59 @@ pub fn polars_filter_momentum_bench_2D(
             .collect_vec();
          */
         //dbg!(trigger_nr);
-        for trg_nr in chunk_triggers {
-            let trigger_frame_vec = data_chunk
-                .axis_iter(Axis(0))
-                .into_iter()
-                .filter(|x| *x[0] == *trg_nr as f64)
-                .flatten()
-                .collect_vec();
-            let trigger_frame = Array::from_shape_vec(
-                (trigger_frame_vec.len() / data.ncols(), data.ncols()),
-                trigger_frame_vec,
-            )
-            .unwrap();
-
-            for (p1, x) in trigger_frame.axis_iter(Axis(0)).enumerate() {
-                let p2 = p1 + 1;
-                let tof_x = *x[1];
-                let px = *x[2];
-                let py = *x[3];
-
-                let row = trigger_frame.slice(s![p2.., ..]);
-                let a = row
+        // push this into a ThreadPool
+        //for trg_nr in chunk_triggers {
+        // https://faraday.ai/blog/saved-by-the-compiler-parallelizing-a-loop-with-rust-and-rayon
+        let chunk_hist = chunk_triggers
+            .par_iter()
+            .map(|trg_nr| {
+                // define 2D histogram into which the values get filled
+                let mut hist = ndhistogram!(
+                    Uniform::<f64>::new(n_bins, hist_min, hist_max),
+                    Uniform::<f64>::new(n_bins, hist_min, hist_max)
+                );
+                let trigger_frame_vec = data_chunk
                     .axis_iter(Axis(0))
                     .into_iter()
-                    .filter(|&x| ((*x[2] + *px).powf(2.) + (*x[3] + *py).powf(2.)) < (*px * *px + *py * *py) * 0.00025)
-                    .map(|x| x[1])
+                    .filter(|x| *x[0] == *trg_nr as f64)
+                    .flatten()
                     .collect_vec();
+                let trigger_frame = Array::from_shape_vec(
+                    (trigger_frame_vec.len() / data.ncols(), data.ncols()),
+                    trigger_frame_vec,
+                )
+                .unwrap();
 
-                for tof_y in a {
-                    hist.fill(&(*tof_x, **tof_y));
+                for (p1, x) in trigger_frame.axis_iter(Axis(0)).enumerate() {
+                    let p2 = p1 + 1;
+                    let tof_x = *x[1];
+                    let px = *x[2];
+                    let py = *x[3];
+
+                    let row = trigger_frame.slice(s![p2.., ..]);
+                    let a = row
+                        .axis_iter(Axis(0))
+                        .into_iter()
+                        .filter(|&x| ((*x[2] + *px).powf(2.) + (*x[3] + *py).powf(2.)) < (*px * *px + *py * *py) * 0.0025)
+                        .map(|x| x[1])
+                        .collect_vec();
+
+                    for tof_y in a {
+                        hist.fill(&(*tof_x, **tof_y));
+                    }
                 }
-            }
-        }
+
+                hist
+            })
+            //.collect_vec();
+            .reduce_with(|hists, hist| (hists + &hist).expect("Axes are compatible"))
+            .unwrap();
         //let b = Array::from_vec(a.fl);
-        //dbg!();
+        cov_hist = (cov_hist + &chunk_hist).expect("Axes are compatible");
+        //dbg!(&cov_hist.len());
     }
 
-    let a_hist: Array2<f64> = Array1::from_iter(hist.values().map(|v| *v).into_iter())
+    let a_hist: Array2<f64> = Array1::from_iter(cov_hist.values().map(|v| *v).into_iter())
         .into_shape((n_bins + 2, n_bins + 2))
         .unwrap();
 
