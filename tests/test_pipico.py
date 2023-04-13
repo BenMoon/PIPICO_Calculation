@@ -134,14 +134,14 @@ def test_pipico_polars_filter_momentum_simulated():
     # df = pl.from_pandas(
     #    pd.DataFrame(pd.read_feather('test_data.feather'), columns=['trigger nr', 'tof', 'px', 'py']))
     # simulate data
-    n_bins = 10
-    n_shots = 100
-    n_parts = 10
+    n_bins = 1000
+    n_shots = 10_000
+    n_parts = 100
 
     tof_min = 0
     tof_max = 10
     df, data_tof, data_px, data_py = gen_data(n_shots, n_parts)
-    df.sort_values(['trigger nr', 'tof'], inplace=True)
+    #df = pl.read_parquet("test_data.parquet")
     df = pl.from_pandas(df)
     da = df.to_numpy()
 
@@ -169,13 +169,13 @@ def test_pipico_polars_filter_momentum_simulated():
         x=da, filter_delta=0.01, n_bins=n_bins, hist_min=tof_min, hist_max=tof_max
     )
     stop = time.time()
-    print(f"Rust numpy took: {stop - start} s")
+    print(f"Rust numpy took: {(stop - start)*1e3} ms")
     print(hist_np)
 
     start = time.time()
     hist_py = filter_cov_py(data_tof, data_px, data_py, n_bins, tof_min, tof_max)
     stop = time.time()
-    print(f"Python took: {stop - start} s")
+    print(f"Python took: {(stop - start)*1e3} ms")
     print(hist_py)
 
     #print("difference:")
@@ -197,7 +197,8 @@ def filter_cov_py(data_tof, data_px, data_py, n_bins, tof_min, tof_max):
             p2 = p1 + 1
             px = row_px[p1]
             py = row_py[p1]
-            row = row_tof[p2:][((row_px[p2:] + px) ** 2 < 0.01) & ((row_py[p2:] + py) ** 2 < 0.01)]
+            #row = row_tof[p2:][((row_px[p2:] + px) ** 2 < 0.01) & ((row_py[p2:] + py) ** 2 < 0.01)]
+            row = row_tof[p2:][(row_px[p2:] + px)**2 + (row_py[p2:] + py)**2 < (px**2 + py**2)*0.0025]
             for y in row:
                 # idx_y = np.digitize(row_tof[p2], bins=bins) - 1
                 idx_y = np.digitize(y, bins=bins) - 1
@@ -244,6 +245,7 @@ def gen_data(n_shots=100, n_parts=10):
         np.column_stack((trigger_nrs, data_tof_col, data_px_col, data_py_col)),
         columns=("trigger nr", "tof", "px", "py"),
     )
+    df.sort_values(['trigger nr', 'tof'], inplace=True)
 
     df.to_parquet("test_data.parquet")
     return df, data_tof, data_px, data_py

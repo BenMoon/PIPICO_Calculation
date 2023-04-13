@@ -539,6 +539,7 @@ pub fn ndarray_filter_momentum_bench_2D(
     let data_py = data.column(3);
 
     //let trigger_nrs = data.slice(s![..,0]).iter().map(|x| *x as i64).unique().collect_vec();
+    // vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ...]
     let trigger_nrs = data_trigger
         .iter()
         .map(|x| *x as i64)
@@ -547,98 +548,107 @@ pub fn ndarray_filter_momentum_bench_2D(
     let num_triggers = trigger_nrs.len();
     let num_cores = num_cpus::get() - 1;
 
-    let mut cov_hist = ndhistogram!(
-        Uniform::<f64>::new(n_bins, hist_min, hist_max),
-        Uniform::<f64>::new(n_bins, hist_min, hist_max)
-    );
+    // let mut cov_hist = ndhistogram!(
+    //     Uniform::<f64>::new(n_bins, hist_min, hist_max),
+    //     Uniform::<f64>::new(n_bins, hist_min, hist_max)
+    // );
     // iterate over chunks, the computation of a chunk should be pushed into a thread
     // chunks are defined as group of triggers, the size is determined by the number of CPU cores
     // chunksize determines the size of the chunk, so if we want to unload all data evenly onto the cores
     // we need to do `num_trigger / num_cores`
     // `chunk_triggers` will contain the trigger number which belong to a chunk
-    for chunk_triggers in trigger_nrs.chunks(num_triggers / num_cores) {
-        //let mut data_chunk = Vec::<_>::with_capacity(1000);
-        // TODO: check this to make this nicer: https://docs.rs/ndarray/latest/ndarray/struct.ArrayBase.html#conversions-from-nested-vecsarrays
-        // collect all data which belong to a chunk in a "DataFrame"
-        let chunk_vec = data
-            .axis_iter(Axis(0))
-            .into_iter()
-            .filter(|x| {
-                (x[0] >= *chunk_triggers.first().unwrap() as f64)
-                    & (x[0] <= *chunk_triggers.last().unwrap() as f64)
-            })
-            .flatten()
-            .collect_vec();
-        // collect all data which belong to one chunk
-        let data_chunk =
-            Array::from_shape_vec((chunk_vec.len() / data.ncols(), data.ncols()), chunk_vec)
-                .unwrap();
+    // chunk_triggers = (142) &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ...]
+    //for chunk_triggers in trigger_nrs.chunks(num_triggers / num_cores) {
+    let cov_hist = trigger_nrs
+        .chunks(num_triggers / num_cores)
+        .map(|chunk_triggers| {
+            // TODO: check this to make this nicer: https://docs.rs/ndarray/latest/ndarray/struct.ArrayBase.html#conversions-from-nested-vecsarrays
+            // collect all data which belong to a chunk in a "DataFrame"
+            let chunk_vec = data
+                .axis_iter(Axis(0))
+                .into_iter()
+                .filter(|x| {
+                    (x[0] >= *chunk_triggers.first().unwrap() as f64)
+                        & (x[0] <= *chunk_triggers.last().unwrap() as f64)
+                })
+                .flatten()
+                .collect_vec();
+            // collect all data which belong to one chunk
+            let data_chunk =
+                Array::from_shape_vec((chunk_vec.len() / data.ncols(), data.ncols()), chunk_vec)
+                    .unwrap();
 
-        // inititalise random number generator
-        let mut rng = rand::thread_rng();
-        let distribution = rand::distributions::Uniform::new(0, data_trigger.len());
-
-        /*
-        let trigger_nr = data_chunk
-            .slice(s![.., 0])
-            .iter()
-            .map(|x| **x as i64)
-            .unique()
-            .collect_vec();
-         */
-        //dbg!(trigger_nr);
-        // push this into a ThreadPool
-        //for trg_nr in chunk_triggers {
-        // https://faraday.ai/blog/saved-by-the-compiler-parallelizing-a-loop-with-rust-and-rayon
-        let chunk_hist = chunk_triggers
-            .par_iter()
-            .map(|trg_nr| {
-                // define 2D histogram into which the values get filled
-                let mut hist = ndhistogram!(
-                    Uniform::<f64>::new(n_bins, hist_min, hist_max),
-                    Uniform::<f64>::new(n_bins, hist_min, hist_max)
-                );
-                let trigger_frame_vec = data_chunk
-                    .axis_iter(Axis(0))
-                    .into_iter()
-                    .filter(|x| *x[0] == *trg_nr as f64)
-                    .flatten()
-                    .collect_vec();
-                let trigger_frame = Array::from_shape_vec(
-                    (trigger_frame_vec.len() / data.ncols(), data.ncols()),
-                    trigger_frame_vec,
-                )
-                .unwrap();
-
-                for (p1, x) in trigger_frame.axis_iter(Axis(0)).enumerate() {
-                    let p2 = p1 + 1;
-                    let tof_x = *x[1];
-                    let px = *x[2];
-                    let py = *x[3];
-
-                    let row = trigger_frame.slice(s![p2.., ..]);
-                    let a = row
+            /*
+            let trigger_nr = data_chunk
+                .slice(s![.., 0])
+                .iter()
+                .map(|x| **x as i64)
+                .unique()
+                .collect_vec();
+             */
+            // https://faraday.ai/blog/saved-by-the-compiler-parallelizing-a-loop-with-rust-and-rayon
+            let chunk_hist = chunk_triggers
+                .par_iter()
+                .map(|trg_nr| {
+                    // define 2D histogram into which the values get filled
+                    let mut hist = ndhistogram!(
+                        Uniform::<f64>::new(n_bins, hist_min, hist_max),
+                        Uniform::<f64>::new(n_bins, hist_min, hist_max)
+                    );
+                    let trigger_frame_vec = data_chunk
                         .axis_iter(Axis(0))
                         .into_iter()
-                        .filter(|&x| ((*x[2] + *px).powf(2.) + (*x[3] + *py).powf(2.)) < (*px * *px + *py * *py) * 0.0025)
-                        .map(|x| x[1])
+                        .filter(|x| *x[0] == *trg_nr as f64)
+                        .flatten()
                         .collect_vec();
+                    let trigger_frame = Array::from_shape_vec(
+                        (trigger_frame_vec.len() / data.ncols(), data.ncols()),
+                        trigger_frame_vec,
+                    )
+                    .unwrap();
 
-                    for tof_y in a {
-                        hist.fill(&(*tof_x, **tof_y));
+                    /* calculate covariance */
+                    for (p1, x) in trigger_frame.axis_iter(Axis(0)).enumerate() {
+                        let p2 = p1 + 1;
+                        let tof_x = *x[1];
+                        let px = *x[2];
+                        let py = *x[3];
+
+                        let row = trigger_frame.slice(s![p2.., ..]);
+                        let a = row
+                            .axis_iter(Axis(0))
+                            .into_iter()
+                            .filter(|&x| {
+                                ((*x[2] + *px).powf(2.) + (*x[3] + *py).powf(2.))
+                                    < (*px * *px + *py * *py) * 0.0025
+                            })
+                            .map(|x| x[1])
+                            .collect_vec();
+
+                        for tof_y in a {
+                            hist.fill(&(*tof_x, **tof_y));
+                        }
                     }
-                }
 
-                hist
-            })
-            //.collect_vec();
-            .reduce_with(|hists, hist| (hists + &hist).expect("Axes are compatible"))
-            .unwrap();
-        //let b = Array::from_vec(a.fl);
-        cov_hist = (cov_hist + &chunk_hist).expect("Axes are compatible");
-        //dbg!(&cov_hist.len());
-    }
+                    /* calculate the background */
+                    /*
+                    let mut hist_bg = ndhistogram!(
+                        Uniform::<usize>::new(n_bins, hist_min, hist_max),
+                        Uniform::<usize>::new(n_bins, hist_min, hist_max)
+                    );
+                     */
+                    // inititalise random number generator
+                    //let mut rng = rand::thread_rng();
 
+                    hist
+                })
+                .reduce_with(|hists, hist| (hists + &hist).expect("Axes are compatible"))
+                .unwrap();
+            chunk_hist
+        })
+        .reduce(|acc_hist, hist| (acc_hist + &hist).expect("Axes are compatible"))
+        .unwrap();
+            
     let a_hist: Array2<f64> = Array1::from_iter(cov_hist.values().map(|v| *v).into_iter())
         .into_shape((n_bins + 2, n_bins + 2))
         .unwrap();

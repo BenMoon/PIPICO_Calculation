@@ -97,7 +97,7 @@ fn main() {
     //dbg!(&df);
 
     let a = df.select(["trigger nr", "tof", "px", "py"]).unwrap().to_ndarray::<Float64Type>().unwrap();
-    pipico::polars_filter_momentum_bench_idx(a.clone());
+    //pipico::polars_filter_momentum_bench_idx(a.clone());
     //dbg!(a);
 
     let b = pipico::ndarray_filter_momentum_bench_2D(a.clone());
