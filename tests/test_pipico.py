@@ -134,16 +134,16 @@ def test_pipico_polars_filter_momentum_simulated():
     # df = pl.from_pandas(
     #    pd.DataFrame(pd.read_feather('test_data.feather'), columns=['trigger nr', 'tof', 'px', 'py']))
     # simulate data
-    n_bins = 1000
-    n_shots = 10_000
-    n_parts = 100
+    n_bins = 100
+    n_shots = 1_000
+    n_parts = 10
 
     tof_min = 0
     tof_max = 10
     df, data_tof, data_px, data_py = gen_data(n_shots, n_parts)
     #df = pl.read_parquet("test_data.parquet")
     df = pl.from_pandas(df)
-    da = df.to_numpy()
+    da = df[['trigger nr', 'idx', 'px', 'py']].to_numpy()
 
     '''
     start = time.time()
@@ -246,6 +246,8 @@ def gen_data(n_shots=100, n_parts=10):
         columns=("trigger nr", "tof", "px", "py"),
     )
     df.sort_values(['trigger nr', 'tof'], inplace=True)
+    df.reset_index(inplace=True, drop=True)
+    df['idx'] = df.index
 
     df.to_parquet("test_data.parquet")
     return df, data_tof, data_px, data_py
