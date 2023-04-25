@@ -33,7 +33,9 @@ criterion = "0.4.0"
 memuse = "*"
 
 [profile.release]
-debug = true
+debug = true       # Debug symbols for our profiler.
+lto = true         # Link-time optimization.
+codegen-units = 1  # Slower compilation but faster code. 
 
 [[bench]]
 name = "my_benchmark"

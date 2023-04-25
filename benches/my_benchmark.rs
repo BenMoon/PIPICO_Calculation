@@ -36,7 +36,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     thread::sleep(Duration::from_secs(10));
 
     c.bench_function("par_iter idx", |b| {
-        b.iter(|| pipico::ndarray_filter_momentum_bench_idx(black_box(df_idx.clone())))
+        b.iter(|| pipico::get_pairs_bench(black_box(df_idx.clone())))
     });
     thread::sleep(Duration::from_secs(10));
     

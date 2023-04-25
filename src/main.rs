@@ -91,7 +91,7 @@ fn main() {
     }
 
     // open file
-    let mut file = std::fs::File::open("/Users/brombh/data/programm/rust/pipico_simple_example/tests/test_data-1e5-1e2.parquet").expect("file not found");
+    let mut file = std::fs::File::open("/Users/brombh/data/programm/rust/pipico_simple_example/tests/test_data-1e3-1e1.parquet").expect("file not found");
     // read to DataFrame
     let df = ParquetReader::new(&mut file).finish().unwrap();
     //dbg!(&df);
@@ -102,18 +102,18 @@ fn main() {
 
     let b = pipico::ndarray_filter_momentum_bench_2D(a.clone());
     //dbg!(b);
-    println!("{:?}", b);
+    //println!("{:?}", b);
  
-    let a = df.select(["trigger nr", "idx", "px", "py"]).unwrap().to_ndarray::<Float64Type>().unwrap();
-    let c = pipico::ndarray_filter_momentum_bench_idx(a.clone());
-    //dbg!(b);
-    println!("{:?}", c);
+    let a = df.select(["trigger nr", "idx", "px", "py", "pz"]).unwrap().to_ndarray::<Float64Type>().unwrap();
+    let (fg, bg) = pipico::get_pairs_bench(a.clone());
+    dbg!(fg, bg);
+    //println!("{:?}", c);
 
     //let c = pipico::polars_filter_momentum_bench_idx(a.clone());
     //dbg!(c);
 
-    let mut rng = rand::thread_rng();
-    pipico::get_bg_idx(&mut rng);
+    //let mut rng = rand::thread_rng();
+    //pipico::get_bg_idx(&mut rng);
     //pipico::get_bg_idx(rng);
 
 

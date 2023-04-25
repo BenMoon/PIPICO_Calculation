@@ -134,123 +134,247 @@ def test_pipico_polars_filter_momentum_simulated():
     # df = pl.from_pandas(
     #    pd.DataFrame(pd.read_feather('test_data.feather'), columns=['trigger nr', 'tof', 'px', 'py']))
     # simulate data
-    n_bins = 100
-    n_shots = 1_000
+    n_bins = 10
+    n_shots = 5_000
     n_parts = 10
 
-    tof_min = 0
-    tof_max = 10
-    df, data_tof, data_px, data_py = gen_data(n_shots, n_parts)
+    tof_min = 4
+    tof_max = 4.45
+    df = gen_data(n_shots, n_parts)
     #df = pl.read_parquet("test_data.parquet")
-    df = pl.from_pandas(df)
-    da = df[['trigger nr', 'idx', 'px', 'py']].to_numpy()
+    da = pl.from_pandas(df)[['trigger nr', 'idx', 'px', 'py', 'pz', 'tof']].to_numpy()
 
-    '''
+    # get pairs from rust
     start = time.time()
-    hist_pl = pipico.polars_filter_momentum_pl(
-        pydf=df[["trigger nr", "tof", "px", "py"]],
-        col_grp="trigger nr",
-        col_pipico="tof",
-        col_mask1="px",
-        col_mask2="py",
-        filter_delta=0.01,
-        n_bins=n_bins,
-        hist_min=tof_min,
-        hist_max=tof_max,
-    )
+    pairs_fg, pairs_bg = pipico.get_covar_pairs(x=da, momentum_cut=0.0025)
     stop = time.time()
-    #print(f"Rust polars took: {stop - start} s")
-    #print("Rust")
-    #print(hist_pl)
-    '''
+    time_rs = stop - start
+    print(f"Rust numpy took: {(time_rs)*1e3} ms")
 
+    # get pairs from python implementation
     start = time.time()
-    hist_np = pipico.polars_filter_momentum_np(
-        x=da, filter_delta=0.01, n_bins=n_bins, hist_min=tof_min, hist_max=tof_max
-    )
+    hist2d, hist2d_bg, pairs_py_fg, pairs_py_bg = filter_covariance_py(df, n_bins=n_bins, tof_min=tof_min, tof_max=tof_max)
     stop = time.time()
-    print(f"Rust numpy took: {(stop - start)*1e3} ms")
-    print(hist_np)
+    time_py = stop - start
+    pairs_py_fg = np.array(pairs_py_fg)
+    pairs_py_bg = np.array(pairs_py_bg)
+    print(f"Python took: {(time_py)} s")
+    print(f'Rust {(time_py / time_rs)}x faster')
+    
+    assert pairs_fg.all() == pairs_py_fg.all()
+    df_pairs_fg, df_pairs_bg = sort_pairs(df, pairs_fg, pairs_bg)
+    assert (df_pairs_fg['tof2'] - df_pairs_fg['tof1']).all() >= 0, "TOF1 <= TOF2 needs to be given"
+    assert (df_pairs_bg['tof2'] - df_pairs_bg['tof1']).all() >= 0, "TOF1 <= TOF2 needs to be given"
+    df_pairs_py_fg, df_pairs_py_bg = sort_pairs(df, pairs_py_fg, pairs_py_bg)
+    assert (df_pairs_py_fg['tof2'] - df_pairs_py_fg['tof1']).all() >= 0, "TOF1 <= TOF2 needs to be given"
+    assert (df_pairs_py_bg['tof2'] - df_pairs_py_bg['tof1']).all() >= 0, "TOF1 <= TOF2 needs to be given"
+    assert df_pairs_fg.all().all() == df_pairs_py_fg.all().all()
 
-    start = time.time()
-    hist_py = filter_cov_py(data_tof, data_px, data_py, n_bins, tof_min, tof_max)
-    stop = time.time()
-    print(f"Python took: {(stop - start)*1e3} ms")
-    print(hist_py)
+    bins = np.linspace(df.tof.min(), df.tof.max(), 10)
+    xy_hist, _, _ = np.histogram2d(df_pairs_fg["tof1"], df_pairs_fg["tof2"], bins=bins)
+    xy_hist_bg, _, _ = np.histogram2d(df_pairs_bg["tof1"], df_pairs_bg["tof2"], bins=bins)
+    print('rust fg')
+    print(np.int_(xy_hist))
+    print('rust bg')
+    print(np.int_(xy_hist_bg))
 
-    #print("difference:")
-    #print(hist_pl - hist_py)
-    #print(hist_np - hist_py)
-    assert hist_np.all() == hist_py.all()
+    xy_hist_py, _, _ = np.histogram2d(df_pairs_py_fg["tof1"], df_pairs_py_fg["tof2"], bins=bins)
+    xy_hist_bg_py, _, _ = np.histogram2d(df_pairs_py_bg["tof1"], df_pairs_py_bg["tof2"], bins=bins)
+    print('python fg')
+    print(np.int_(xy_hist_py))
+    print('python bg')
+    print(np.int_(xy_hist_bg_py))
+
+    assert xy_hist.all() == xy_hist_py.all()
+    for i in range(len(xy_hist_bg)):
+        if len(xy_hist_bg[i, :i]) > 0:
+            assert xy_hist[i, :i].all() == 0, f"{xy_hist[i, :i]}"
+            assert xy_hist_bg[i, :i].all() == 0, f"{xy_hist_bg[i, :i]}"
+  
+
+def sort_pairs(df: pd.DataFrame, pairs: np.array, pairs_bg: np.array) -> (pd.DataFrame, pd.DataFrame):
+    # forground
+    df_p1 = df.loc[pairs[:, 0]].copy()
+    df_p2 = df.loc[pairs[:, 1]].copy()
+    df_p1.reset_index(drop=True, inplace=True)
+    df_p2.reset_index(drop=True, inplace=True)
+    df_p1 = df_p1.add_suffix("1")
+    df_p2 = df_p2.add_suffix("2")
+    df_pairs = pd.concat([df_p1, df_p2], axis=1)
+
+    # Background
+    df_p1 = df.loc[pairs_bg[:, 0]].copy()
+    df_p2 = df.loc[pairs_bg[:, 1]].copy()
+    df_p1.reset_index(drop=True, inplace=True)
+    df_p2.reset_index(drop=True, inplace=True)
+    df_p1 = df_p1.add_suffix("1")
+    df_p2 = df_p2.add_suffix("2")
+    df_pairs_bg = pd.concat([df_p1, df_p2], axis=1)
+
+    return df_pairs, df_pairs_bg
 
 
-def filter_cov_py(data_tof, data_px, data_py, n_bins, tof_min, tof_max):
-    hist2d = np.zeros((n_bins, n_bins))
-    bins = np.linspace(tof_min, tof_max, n_bins + 1)
-    for row_tof, row_px, row_py in zip(data_tof, data_px, data_py):
-        idx = row_tof.argsort()
-        row_tof = row_tof[idx]
-        row_px = row_px[idx]
-        row_py = row_py[idx]
+def filter_covariance_py(data: pd.DataFrame, tof_min=0, tof_max=10, n_bins=10):
+    # define function to be run on thread
+    bins = np.linspace(tof_min, tof_max, n_bins+1)
+
+    data.sort_values(['trigger nr', 'tof'], inplace=True)
+        
+    hist2d    = np.zeros((n_bins, n_bins))
+    hist2d_bg = np.zeros((n_bins, n_bins))
+    pairs = []
+    pairs_bg = []
+
+    for trigger_nr, df in data.groupby(["trigger nr"])['tof', 'px', 'py', 'pz', 'idx']:
+        row_tof = df['tof'].to_numpy()
+        row_px  = df['px'].to_numpy()
+        row_py  = df['py'].to_numpy()
+        row_pz  = df['pz'].to_numpy()
+        row_idx = df['idx'].to_numpy()
+
+        # get data for bg computation
+        df_bg = data.query(f"`trigger nr` != {trigger_nr}").sample(len(row_tof))
+        row_tof_bg = df_bg['tof'].to_numpy()
+        row_px_bg  = df_bg['px'].to_numpy()
+        row_py_bg  = df_bg['py'].to_numpy()
+        row_pz_bg  = df_bg['pz'].to_numpy()
+        row_idx_bg = df_bg.index.to_numpy()
         for p1, tof in enumerate(row_tof):  # go through every element in the row
-            idx_x = np.digitize(tof, bins=bins) - 1
+            idx_x = np.digitize(tof, bins = bins) - 1
             p2 = p1 + 1
             px = row_px[p1]
             py = row_py[p1]
-            #row = row_tof[p2:][((row_px[p2:] + px) ** 2 < 0.01) & ((row_py[p2:] + py) ** 2 < 0.01)]
-            row = row_tof[p2:][(row_px[p2:] + px)**2 + (row_py[p2:] + py)**2 < (px**2 + py**2)*0.0025]
-            for y in row:
+            pz = row_pz[p1]
+            mask = (row_px[p2:] + px)**2 + (row_py[p2:] + py)**2 + (row_pz[p2:] + pz)**2 <= (px**2 + py**2 + pz**2) * 0.0025
+            row = row_tof[p2:][mask]
+            for y, idx in zip(row, row_idx[p2:][mask]):
                 # idx_y = np.digitize(row_tof[p2], bins=bins) - 1
-                idx_y = np.digitize(y, bins=bins) - 1
+                idx_y = np.digitize(y, bins = bins) - 1
                 hist2d[idx_y, idx_x] += 1
-    return hist2d
+                #indizes.append(row_idx[p1])
+                pairs.append([row_idx[p1], idx])
+            #[indizes.append(i) for i in row_idx[p2:][mask]]
 
 
-def gen_data(n_shots=100, n_parts=10):
-    # simulate some data
-    data_tof = np.zeros((n_shots, n_parts))
-    for i in range(n_shots):
-        dt1 = np.random.uniform(-0.25, 0.25)
-        data_tof[i][0] = 4 - dt1
-        data_tof[i][1] = 2 + dt1
-        data_tof[i][2] = 6 - dt1
-        data_tof[i][3] = 8 + dt1
-        data_tof[i][4:] = np.random.uniform(0, 10, n_parts - 4)
+            # calc background
+            mask = (row_px_bg[p2:] + px)**2 + (row_py_bg[p2:] + py)**2 + (row_pz_bg[p2:] + pz)**2 <= (px**2 + py**2 + pz**2) * 0.0025
+            row_bg = row_tof_bg[p2:][mask]
+            for y, idx in zip(row_bg, row_idx_bg[p2:][mask]):
+                # idx_y = np.digitize(row_tof[p2], bins=bins) - 1
+                idx_y = np.digitize(y, bins = bins) - 1
+                if idx_x <= idx_y:
+                    hist2d_bg[idx_y, idx_x] += 1
+                    pairs_bg.append([row_idx[p1], idx])                    
+                else:
+                    hist2d_bg[idx_x, idx_y] += 1
+                    pairs_bg.append([idx, row_idx[p1]])
+                    
+    return hist2d, hist2d_bg, pairs, pairs_bg
 
-    data_px = np.zeros((n_shots, n_parts))
-    data_py = np.zeros((n_shots, n_parts))
-    for i in range(n_shots):
-        dt = np.random.uniform(-10, 10, 2)
-        data_px[i][0] = dt[0]
-        data_py[i][0] = dt[0]
-        data_px[i][1] = -dt[0]
-        data_py[i][1] = -dt[0]
-        data_px[i][2] = dt[1]
-        data_py[i][2] = dt[1]
-        data_px[i][3] = -dt[1]
-        data_py[i][3] = -dt[1]
 
-        data_px[i][4:] = np.random.uniform(-10, 10, n_parts - 4)
-        data_py[i][4:] = np.random.uniform(-10, 10, n_parts - 4)
+def gen_data(Ntr=100, n_parts=10):
+    def ptot(event):
+        # calculate the time of flight
+        p = event[4]
+        m = event[5]
+        c_1 = 1
+        t_0 = c_1 * np.sqrt(m)
+        c_2 = 0.01  # to scale the size of the PIPICO line
+        t = t_0 + p * c_2
+        return t
 
-    # convert list to DataFrame
-    trigger_nrs = [
-        num for vec in [len(row) * [i] for i, row in enumerate(data_tof)] for num in vec
-    ]
-    data_tof_col = [i for row in data_tof for i in row]
-    data_px_col = [i for row in data_px for i in row]
-    data_py_col = [i for row in data_py for i in row]
+    def detection(A, tr, Nf, p_x, p_y, p_z, m):
+        t = ptot([tr, Nf, p_x, p_y, p_z, m])
+        if len(A) > 0:
+            A = np.vstack((A, np.array([tr, Nf, p_x, p_y, p_z, m, t])))
+        else:
+            A = np.array([[tr, Nf, p_x, p_y, p_z, m, t]])
+        return A
 
-    df = pd.DataFrame(
-        np.column_stack((trigger_nrs, data_tof_col, data_px_col, data_py_col)),
-        columns=("trigger nr", "tof", "px", "py"),
-    )
+    def single_trigger(Nf, tr):
+        Nf = int((np.random.poisson(Nf)))
+        A = []
+        for f in range(Nf):
+            E_tot = 1
+            channel = int(np.random.uniform(0, 3))
+            if channel == 0:
+                m_1 = 18
+                m_2 = 18
+            elif channel == 1:
+                m_1 = 17
+                m_2 = 18
+            else:
+                m_1 = 17
+                m_2 = 19
+            mu = m_1 * m_2 / (m_1 + m_2)
+            p = np.sqrt(2 * E_tot * mu)
+
+            # uniform distribution
+            cost = np.random.uniform(-1, 1)
+            sint = np.sqrt(1 - cost**2)
+            phi = np.random.uniform(0, 2 * np.pi)
+            cosp = np.cos(phi)
+            sinp = np.sin(phi)
+
+            # fill momenta
+            p_x = p * cosp * sint
+            p_y = p * sinp * sint
+            p_z = p * cost
+            alpha = 0.5
+
+            # fill first particle
+            if np.random.uniform(0, 1) < alpha:
+                A = detection(A, tr, Nf, p_x, p_y, p_z, m_1)
+
+            # fill second particle
+            if np.random.uniform(0, 1) < alpha:
+                A = detection(A, tr, Nf, -p_x, -p_y, -p_z, m_2)
+
+        if np.ndim(A) > 0 and len(A) > 0:
+            A = A[A[:, 6].argsort()]
+        return A
+
+
+    Nf = 3  # number of fragmentation events
+    # create a data set
+    A = []
+    tr = 0
+    while tr < Ntr:
+        tr_sub = 0
+        A_sub = []
+        first = True
+        while tr_sub < 1000 and tr < Ntr:  # divide the Montecarlo sampling
+            # into smaller steps to speed up the process.
+            Atr = single_trigger(Nf, tr)  # single trigger data
+            tr += 1
+            tr_sub += 1
+            if first and len(Atr) != 0:
+                A_sub = Atr
+                first = False
+            elif len(Atr) != 0:
+                A_sub = np.vstack((A_sub, Atr))
+            else:
+                continue
+        if len(A) > 0:  # A has some entries already
+            A = np.vstack((A, A_sub))
+        else:  # A is empty
+            A = A_sub
+
+    print("\n")
+    # A = tr, Nf, p_x, p_y, p_z, m, t
+    df = pd.DataFrame(A, columns=["trigger nr", "num part", "px", "py", "pz", "m", "tof"])
     df.sort_values(['trigger nr', 'tof'], inplace=True)
     df.reset_index(inplace=True, drop=True)
     df['idx'] = df.index
-
     df.to_parquet("test_data.parquet")
-    return df, data_tof, data_px, data_py
+    Nions = np.shape(A)[0]
+    print("Total number of ions:", Nions)
+    print("Number of ions with m=17:", np.shape(A[A[:, 5] == 17])[0])
+    print("Number of ions with m=18:", np.shape(A[A[:, 5] == 18])[0])
+    print("Number of ions with m=19:", np.shape(A[A[:, 5] == 19])[0])
+
+
+    return df
 
 
 def test_pipico_polars_filter_momentum_simple():
