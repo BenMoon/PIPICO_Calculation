@@ -21,7 +21,7 @@ ndarray-rand = "0.14.0"
 pyo3 = { version = "0.18", features = ["extension-module"] }
 numpy = "*"
 rayon = "1.7"
-polars = {version="0.28", features = ["lazy", "parquet", "ndarray"]}
+polars = {version="0.28", features = ["parquet", "ndarray"]}
 #pyo3-polars = {version = "*"}
 num_cpus = "*"
 
@@ -30,12 +30,18 @@ pyo3-build-config = "*"
 
 [dev-dependencies]
 criterion = "0.4.0"
-memuse = "*"
+#memuse = "*"
 
+# https://doc.rust-lang.org/cargo/reference/profiles.html
 [profile.release]
-debug = true       # Debug symbols for our profiler.
+debug = false      # Debug symbols for our profiler.
 lto = true         # Link-time optimization.
 codegen-units = 1  # Slower compilation but faster code. 
+
+[profile.bench]
+debug = true        # Debug symbols for our profiler.
+lto = false         # Link-time optimization.
+codegen-units = 16  # Slower compilation but faster code. 
 
 [[bench]]
 name = "my_benchmark"

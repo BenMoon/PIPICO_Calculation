@@ -106,7 +106,7 @@ fn main() {
  
     let a = df.select(["trigger nr", "idx", "px", "py", "pz"]).unwrap().to_ndarray::<Float64Type>().unwrap();
     let (fg, bg) = pipico::get_pairs_bench(a.clone());
-    dbg!(fg, bg);
+    //dbg!(fg, bg);
     //println!("{:?}", c);
 
     //let c = pipico::polars_filter_momentum_bench_idx(a.clone());

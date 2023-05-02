@@ -1,18 +1,19 @@
 #![feature(iter_collect_into)]
 
-use pyo3::ffi::PyImport_ImportModuleEx;
-use pyo3::types::PyTuple;
-use pyo3::{PyObject, ToPyObject};
+use std::collections::HashSet;
+//use pyo3::ffi::PyImport_ImportModuleEx;
+//use pyo3::types::PyTuple;
+//use pyo3::{PyObject, ToPyObject};
 use rand::rngs::ThreadRng;
 use rand::{self, Rng};
-use std::ops::Add;
+//use std::ops::Add;
 use std::usize;
 
-use itertools::{izip, Itertools};
+use itertools::Itertools;
 use ndarray::parallel::prelude::*;
 use ndarray::prelude::*;
 use ndarray::{s, Array1, Array2, Data, ViewRepr};
-use ndarray_rand::rand_distr::num_traits::ToPrimitive;
+//use ndarray_rand::rand_distr::num_traits::ToPrimitive;
 use ndhistogram::{axis::Uniform, ndhistogram, Histogram};
 use numpy::{PyArray2, PyReadonlyArray2, ToPyArray};
 //use polars::export::arrow::compute::filter;
@@ -548,7 +549,7 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
             .collect::<Vec<_>>();
 
         //let b = all_pairs.into_iter().flatten().collect::<Vec<_>>();
-        
+
         let mut fg = Vec::<[f64; 2]>::with_capacity(data.nrows() / 5); // 1/5 is data, not sure how good this guess is
         let mut bg = Vec::<[f64; 2]>::with_capacity(data.nrows() / 10); // 1/10 is bg
         for i in all_pairs.into_iter() {
@@ -575,23 +576,22 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         idx_trg_frame: ArrayBase<ViewRepr<&&&f64>, Dim<[usize; 1]>>,
         max_index: usize,
     ) -> Vec<usize> {
-        //let indices = (100..200).into_iter().collect_vec();
-
-        let mut idx_bg = Vec::<usize>::with_capacity(idx_trg_frame.len());
+        let idx_set: HashSet<usize> =
+            HashSet::from_iter(idx_trg_frame.into_iter().map(|x| ***x as usize));
+        let mut idx_bg = HashSet::with_capacity(idx_trg_frame.len());
         let mut bg: usize;
 
         for _ in (0..idx_trg_frame.len()).into_iter() {
             loop {
                 bg = rng.gen_range(0..max_index);
-                if idx_trg_frame.iter().all(|&x| **x != bg as f64)
-                    && idx_bg.iter().all(|&x| x != bg)
-                {
-                    idx_bg.push(bg);
+                if !idx_set.contains(&bg) && !idx_bg.contains(&bg) {
+                    idx_bg.insert(bg);
                     break;
                 }
             }
         }
-        idx_bg
+
+        idx_bg.into_iter().collect_vec()
     }
 
     /// simple test function
@@ -618,8 +618,6 @@ pub fn get_bg_idx(
     idx_trg_frame: ArrayBase<ViewRepr<&&&f64>, Dim<[usize; 1]>>,
     max_index: usize,
 ) -> Vec<usize> {
-    //let indices = (100..200).into_iter().collect_vec();
-
     let mut idx_bg = Vec::<usize>::with_capacity(idx_trg_frame.len());
     let mut bg: usize;
 
@@ -633,6 +631,30 @@ pub fn get_bg_idx(
         }
     }
     idx_bg
+}
+
+/// generate array of random numbers and check if none are double with reference list
+pub fn get_bg_idx_set(
+    rng: &mut ThreadRng,
+    idx_trg_frame: ArrayBase<ViewRepr<&&&f64>, Dim<[usize; 1]>>,
+    max_index: usize,
+) -> Vec<usize> {
+    let idx_set: HashSet<usize> =
+        HashSet::from_iter(idx_trg_frame.into_iter().map(|x| ***x as usize));
+    let mut idx_bg = HashSet::with_capacity(idx_trg_frame.len());
+    let mut bg: usize;
+
+    for _ in (0..idx_trg_frame.len()).into_iter() {
+        loop {
+            bg = rng.gen_range(0..max_index);
+            if !idx_set.contains(&bg) && !idx_bg.contains(&bg) {
+                idx_bg.insert(bg);
+                break;
+            }
+        }
+    }
+
+    idx_bg.into_iter().collect_vec()
 }
 
 // data needs to be sorted along triggers
@@ -845,7 +867,8 @@ pub fn get_pairs_bench(
                     // inititalise random number generator
                     let mut rng = rand::thread_rng();
                     let trg_frame_indizes = trigger_frame.slice(s![.., 1]);
-                    let bg_frame_idx = get_bg_idx(&mut rng, trg_frame_indizes, data.nrows());
+                    //let bg_frame_idx = get_bg_idx(&mut rng, trg_frame_indizes, data.nrows());
+                    let bg_frame_idx = get_bg_idx_set(&mut rng, trg_frame_indizes, data.nrows());
                     let bg_frame = data.select(Axis(0), &bg_frame_idx);
                     let mut pairs_bg = Vec::with_capacity(trigger_frame.nrows() / 5);
                     for (p1, x) in bg_frame.axis_iter(Axis(0)).enumerate() {

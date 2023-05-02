@@ -135,8 +135,8 @@ def test_pipico_polars_filter_momentum_simulated():
     #    pd.DataFrame(pd.read_feather('test_data.feather'), columns=['trigger nr', 'tof', 'px', 'py']))
     # simulate data
     n_bins = 10
-    n_shots = 5_000
-    n_parts = 10
+    n_shots = 1_000
+    n_parts = 100
 
     tof_min = 4
     tof_max = 4.45
@@ -163,11 +163,11 @@ def test_pipico_polars_filter_momentum_simulated():
     
     assert pairs_fg.all() == pairs_py_fg.all()
     df_pairs_fg, df_pairs_bg = sort_pairs(df, pairs_fg, pairs_bg)
-    assert (df_pairs_fg['tof2'] - df_pairs_fg['tof1']).all() >= 0, "TOF1 <= TOF2 needs to be given"
-    assert (df_pairs_bg['tof2'] - df_pairs_bg['tof1']).all() >= 0, "TOF1 <= TOF2 needs to be given"
+    assert ((df_pairs_fg['tof2'] - df_pairs_fg['tof1']) >= 0).all(), "TOF1 <= TOF2 needs to be given"
+    assert ((df_pairs_bg['tof2'] - df_pairs_bg['tof1']) >= 0).all(), "TOF1 <= TOF2 needs to be given"
     df_pairs_py_fg, df_pairs_py_bg = sort_pairs(df, pairs_py_fg, pairs_py_bg)
-    assert (df_pairs_py_fg['tof2'] - df_pairs_py_fg['tof1']).all() >= 0, "TOF1 <= TOF2 needs to be given"
-    assert (df_pairs_py_bg['tof2'] - df_pairs_py_bg['tof1']).all() >= 0, "TOF1 <= TOF2 needs to be given"
+    assert ((df_pairs_py_fg['tof2'] - df_pairs_py_fg['tof1']) >= 0).all(), "TOF1 <= TOF2 needs to be given"
+    assert ((df_pairs_py_bg['tof2'] - df_pairs_py_bg['tof1']) >= 0).all(), "TOF1 <= TOF2 needs to be given"
     assert df_pairs_fg.all().all() == df_pairs_py_fg.all().all()
 
     bins = np.linspace(df.tof.min(), df.tof.max(), 10)
@@ -185,6 +185,7 @@ def test_pipico_polars_filter_momentum_simulated():
     print('python bg')
     print(np.int_(xy_hist_bg_py))
 
+    # check if lower diagnoal is 0
     assert xy_hist.all() == xy_hist_py.all()
     for i in range(len(xy_hist_bg)):
         if len(xy_hist_bg[i, :i]) > 0:
@@ -261,12 +262,12 @@ def filter_covariance_py(data: pd.DataFrame, tof_min=0, tof_max=10, n_bins=10):
             row_bg = row_tof_bg[p2:][mask]
             for y, idx in zip(row_bg, row_idx_bg[p2:][mask]):
                 # idx_y = np.digitize(row_tof[p2], bins=bins) - 1
-                idx_y = np.digitize(y, bins = bins) - 1
-                if idx_x <= idx_y:
-                    hist2d_bg[idx_y, idx_x] += 1
+                hist_idx_y = np.digitize(y, bins = bins) - 1
+                if tof <= y:
+                    hist2d_bg[hist_idx_y, idx_x] += 1
                     pairs_bg.append([row_idx[p1], idx])                    
                 else:
-                    hist2d_bg[idx_x, idx_y] += 1
+                    hist2d_bg[idx_x, hist_idx_y] += 1
                     pairs_bg.append([idx, row_idx[p1]])
                     
     return hist2d, hist2d_bg, pairs, pairs_bg
@@ -291,47 +292,49 @@ def gen_data(Ntr=100, n_parts=10):
             A = np.array([[tr, Nf, p_x, p_y, p_z, m, t]])
         return A
 
-    def single_trigger(Nf, tr):
-        Nf = int((np.random.poisson(Nf)))
+    def single_trigger(Nf, tr, n_parts = 10):
         A = []
-        for f in range(Nf):
-            E_tot = 1
-            channel = int(np.random.uniform(0, 3))
-            if channel == 0:
-                m_1 = 18
-                m_2 = 18
-            elif channel == 1:
-                m_1 = 17
-                m_2 = 18
-            else:
-                m_1 = 17
-                m_2 = 19
-            mu = m_1 * m_2 / (m_1 + m_2)
-            p = np.sqrt(2 * E_tot * mu)
+        for _ in range(n_parts): # generate data for n particles
+            nf = int((np.random.poisson(Nf)))
+            for f in range(nf):
+                E_tot = 1
+                channel = int(np.random.uniform(0, 3))
+                if channel == 0:
+                    m_1 = 18
+                    m_2 = 18
+                elif channel == 1:
+                    m_1 = 17
+                    m_2 = 18
+                else:
+                    m_1 = 17
+                    m_2 = 19
+                mu = m_1 * m_2 / (m_1 + m_2)
+                p = np.sqrt(2 * E_tot * mu)
 
-            # uniform distribution
-            cost = np.random.uniform(-1, 1)
-            sint = np.sqrt(1 - cost**2)
-            phi = np.random.uniform(0, 2 * np.pi)
-            cosp = np.cos(phi)
-            sinp = np.sin(phi)
+                # uniform distribution
+                cost = np.random.uniform(-1, 1)
+                sint = np.sqrt(1 - cost**2)
+                phi = np.random.uniform(0, 2 * np.pi)
+                cosp = np.cos(phi)
+                sinp = np.sin(phi)
 
-            # fill momenta
-            p_x = p * cosp * sint
-            p_y = p * sinp * sint
-            p_z = p * cost
-            alpha = 0.5
+                # fill momenta
+                p_x = p * cosp * sint
+                p_y = p * sinp * sint
+                p_z = p * cost
+                alpha = 0.5
 
-            # fill first particle
-            if np.random.uniform(0, 1) < alpha:
-                A = detection(A, tr, Nf, p_x, p_y, p_z, m_1)
+                # fill first particle
+                if np.random.uniform(0, 1) < alpha:
+                    A = detection(A, tr, Nf, p_x, p_y, p_z, m_1)
 
-            # fill second particle
-            if np.random.uniform(0, 1) < alpha:
-                A = detection(A, tr, Nf, -p_x, -p_y, -p_z, m_2)
+                # fill second particle
+                if np.random.uniform(0, 1) < alpha:
+                    A = detection(A, tr, Nf, -p_x, -p_y, -p_z, m_2)
 
         if np.ndim(A) > 0 and len(A) > 0:
             A = A[A[:, 6].argsort()]
+        
         return A
 
 
@@ -345,7 +348,7 @@ def gen_data(Ntr=100, n_parts=10):
         first = True
         while tr_sub < 1000 and tr < Ntr:  # divide the Montecarlo sampling
             # into smaller steps to speed up the process.
-            Atr = single_trigger(Nf, tr)  # single trigger data
+            Atr = single_trigger(Nf, tr, n_parts)  # single trigger data
             tr += 1
             tr_sub += 1
             if first and len(Atr) != 0:
