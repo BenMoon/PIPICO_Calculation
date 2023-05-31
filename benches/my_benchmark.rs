@@ -36,7 +36,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| pipico::get_pairs_bench(black_box(df_idx.clone())))
     });
     thread::sleep(Duration::from_secs(10));
-    /*
+
     c.bench_function("par_iter inner", |b| {
         b.iter(|| pipico::ndarray_filter_momentum_bench_2D(black_box(df_tof.clone())))
     });
@@ -50,7 +50,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("2D array: outer for", |b| {
         b.iter(|| pipico::ndarray_filter_momentum_bench_outer_for(black_box(df_tof.clone())))
     });
-     */
+     
 }
 
 // benchmark get background with index

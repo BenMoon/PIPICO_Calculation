@@ -130,7 +130,7 @@ def test_pipico_polars_filter_momentum():
     assert (hist == should_be).all(), hist
 
 
-def test_pipico_polars_filter_momentum_simulated():
+def test_pipico_polars_filter_relative_momentum():
     # df = pl.from_pandas(
     #    pd.DataFrame(pd.read_feather('test_data.feather'), columns=['trigger nr', 'tof', 'px', 'py']))
     # simulate data
@@ -165,6 +165,8 @@ def test_pipico_polars_filter_momentum_simulated():
     df_pairs_fg, df_pairs_bg = sort_pairs(df, pairs_fg, pairs_bg)
     assert ((df_pairs_fg['tof2'] - df_pairs_fg['tof1']) >= 0).all(), "TOF1 <= TOF2 needs to be given"
     assert ((df_pairs_bg['tof2'] - df_pairs_bg['tof1']) >= 0).all(), "TOF1 <= TOF2 needs to be given"
+    assert (df_pairs_fg['trigger nr1'] == df_pairs_fg['trigger nr2']).all(), "triggers for pairs are not same"
+    #assert (df_pairs_bg['trigger nr1'] != df_pairs_bg['trigger nr2']).all(), "triggers for pairs in bg are not same"
     df_pairs_py_fg, df_pairs_py_bg = sort_pairs(df, pairs_py_fg, pairs_py_bg)
     assert ((df_pairs_py_fg['tof2'] - df_pairs_py_fg['tof1']) >= 0).all(), "TOF1 <= TOF2 needs to be given"
     assert ((df_pairs_py_bg['tof2'] - df_pairs_py_bg['tof1']) >= 0).all(), "TOF1 <= TOF2 needs to be given"
@@ -192,6 +194,79 @@ def test_pipico_polars_filter_momentum_simulated():
             assert xy_hist[i, :i].all() == 0, f"{xy_hist[i, :i]}"
             assert xy_hist_bg[i, :i].all() == 0, f"{xy_hist_bg[i, :i]}"
   
+def test_pipico_polars_filter_momentum_fixed_cut():
+    # df = pl.from_pandas(
+    #    pd.DataFrame(pd.read_feather('test_data.feather'), columns=['trigger nr', 'tof', 'px', 'py']))
+    # simulate data
+    n_bins = 10
+    n_shots = 1_000
+    n_parts = 10
+
+    tof_min = 4
+    tof_max = 4.45
+    #df = gen_data(n_shots, n_parts)
+    #df = pl.read_parquet("test_data.parquet")
+    #da = pl.from_pandas(df)[['trigger nr', 'idx', 'px', 'py', 'pz', 'tof']].to_numpy()
+    #df = pl.read_ipc('/Users/brombh/data/programm/rust/pipico_simple_example/tests/test_data_abs_momentum_cut.feather')
+    df = pd.read_feather('/Users/brombh/data/programm/rust/pipico_simple_example/tests/test_data_abs_momentum_cut.feather')
+    df['px'] = df['p_x']
+    df['py'] = df['p_y']
+    df['pz'] = df['p_z']
+    da = pl.from_pandas(df)[['trigger nr', 'idx', 'p_x', 'p_y', 'p_z', 'tof', 'mz']].to_numpy()
+    mass_momementum_cut = np.array(
+    [[17.5, 18.5, 17.5, 18.5, 1e1**2],
+     [16.5, 17.5, 17.5, 18.5, 2.9e1**2],
+     [16.5, 17.5, 18.5, 19.5, 9.7e1**2]])
+    default_momentum_cut = 3e5**2
+
+
+    # get pairs from rust
+    start = time.time()
+    pairs_fg, pairs_bg = pipico.get_covar_pairs_fixed_cut(da, mass_momementum_cut, default_momentum_cut)
+    stop = time.time()
+    time_rs = stop - start
+    print(f"Rust numpy took: {(time_rs)*1e3} ms")
+    
+    
+    #df_pairs_fg, df_pairs_bg = sort_pairs(df, pairs_fg, pairs_bg)
+    #assert ((df_pairs_fg['tof2'] - df_pairs_fg['tof1']) >= 0).all(), "TOF1 <= TOF2 needs to be given"
+    #assert ((df_pairs_bg['tof2'] - df_pairs_bg['tof1']) >= 0).all(), "TOF1 <= TOF2 needs to be given"
+
+
+    '''
+    import matplotlib.pyplot as plt
+    x_hist, x_bins = np.histogram(np.sqrt(
+        (df_pairs_fg['px1'] + df_pairs_fg['px2'])**2 + 
+        (df_pairs_fg['py1'] + df_pairs_fg['py2'])**2 + 
+        (df_pairs_fg['pz1'] + df_pairs_fg['pz2'])**2), bins=100)
+    x = (x_bins[:-1] + x_bins[1:]) * 0.5
+    plt.plot(x, x_hist)
+    plt.show()
+    '''
+
+    '''
+    bins = np.linspace(df.tof.min(), df.tof.max(), 10)
+    xy_hist, _, _ = np.histogram2d(df_pairs_fg["tof1"], df_pairs_fg["tof2"], bins=bins)
+    xy_hist_bg, _, _ = np.histogram2d(df_pairs_bg["tof1"], df_pairs_bg["tof2"], bins=bins)
+    print('rust fg')
+    print(np.int_(xy_hist))
+    print('rust bg')
+    print(np.int_(xy_hist_bg))
+
+    xy_hist_py, _, _ = np.histogram2d(df_pairs_py_fg["tof1"], df_pairs_py_fg["tof2"], bins=bins)
+    xy_hist_bg_py, _, _ = np.histogram2d(df_pairs_py_bg["tof1"], df_pairs_py_bg["tof2"], bins=bins)
+    print('python fg')
+    print(np.int_(xy_hist_py))
+    print('python bg')
+    print(np.int_(xy_hist_bg_py))
+
+    # check if lower diagnoal is 0
+    assert xy_hist.all() == xy_hist_py.all()
+    for i in range(len(xy_hist_bg)):
+        if len(xy_hist_bg[i, :i]) > 0:
+            assert xy_hist[i, :i].all() == 0, f"{xy_hist[i, :i]}"
+            assert xy_hist_bg[i, :i].all() == 0, f"{xy_hist_bg[i, :i]}"
+    '''
 
 def sort_pairs(df: pd.DataFrame, pairs: np.array, pairs_bg: np.array) -> (pd.DataFrame, pd.DataFrame):
     # forground
@@ -423,6 +498,7 @@ def test_pipico_polars_filter_momentum_simple():
 
 
 if __name__ == "__main__":
-    test_pipico_polars_filter_momentum_simulated()
+    #test_pipico_polars_filter_momentum_simulated()
+    test_pipico_polars_filter_momentum_fixed_cut()
     # test_pipico_polars_filter_momentum()
     # test_pipico_polars_filter_momentum_simple()

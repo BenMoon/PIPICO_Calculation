@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use rand::rngs::ThreadRng;
 use rand::{self, Rng};
 //use std::ops::Add;
-use std::usize;
+use std::{default, usize};
 
 use itertools::Itertools;
 use ndarray::parallel::prelude::*;
@@ -388,15 +388,9 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
             .to_pyarray(py))
     }
 
-    /// calculate a covariance map
+    /// Extract ion pairs fulfilling the condition of a 3D momentum conservation
     /// pydf: polars dataframe containing the data to compute
-    /// col_grp: column name over which to perform the groupby
-    /// col_pipico: column name over which the correlations should be calculated
-    /// col_mask: column name which provides which should act to mask col_pipico
-    /// Δr: width of the ring for the mask
-    /// nbins: number of bins for map
-    /// min: histogram min
-    /// max: histogram max
+    /// momentum_cut: realtiv cut on Newton sphere
     #[pyfn(m)]
     fn get_covar_pairs<'py>(
         py: Python<'py>,
@@ -570,6 +564,222 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         //    .to_pyarray(py)))
     }
 
+    /// Extract ion pairs fulfilling the condition of a 3D momentum conservation
+    /// x: 2D array containing the data [trigger nr, index, px, py, pz, tof, mass]
+    /// mass_momentum_cut: px+py+pz <= mass_momentum_cut for masses define in this array, e.g.
+    /// ```
+    ///     mass_momementum_cut = np.array(
+    ///         [[17.5, 18.5, 17.5, 18.5, 1e1**2],
+    ///         [16.5, 17.5, 17.5, 18.5, 2.9e1**2],
+    ///         [16.5, 17.5, 18.5, 19.5, 9.7e1**2]])
+    ///     default_momentum_cut = 3e5**2
+    /// ```
+    /// default_momentum_cut: momentum sphere which applies for all other masses
+    #[pyfn(m)]
+    fn get_covar_pairs_fixed_cut<'py>(
+        py: Python<'py>,
+        x: PyReadonlyArray2<'py, f64>,
+        mass_momentum_cut: PyReadonlyArray2<'py, f64>,
+        default_momentum_cut: f64,
+    ) -> PyResult<(&'py PyArray2<f64>, &'py PyArray2<f64>)> {
+        let data = x.as_array();
+        let mp_cut = mass_momentum_cut.as_array();
+
+        let data_trigger = data.column(0);
+
+        //let trigger_nrs = data.slice(s![..,0]).iter().map(|x| *x as i64).unique().collect_vec();
+        // vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ...]
+        let trigger_nrs = data_trigger
+            .iter()
+            .map(|x| *x as i64)
+            .unique()
+            .collect_vec();
+        let num_triggers = trigger_nrs.len();
+        let num_cores = 1;//num_cpus::get() - 1;
+
+        // iterate over chunks, the computation of a chunk should be pushed into a thread
+        // chunks are defined as group of triggers, the size is determined by the number of CPU cores
+        // chunksize determines the size of the chunk, so if we want to unload all data evenly onto the cores
+        // we need to do `num_trigger / num_cores`
+        // `chunk_triggers` will contain the trigger number which belong to a chunk
+        // chunk_triggers = (142) &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ...]
+        //for chunk_triggers in trigger_nrs.chunks(num_triggers / num_cores) {
+        let all_pairs = trigger_nrs
+            .chunks(num_triggers / num_cores)
+            .map(|chunk_triggers| {
+                // TODO: check this to make this nicer: https://docs.rs/ndarray/latest/ndarray/struct.ArrayBase.html#conversions-from-nested-vecsarrays
+                // collect all data which belong to a chunk in a "DataFrame"
+                let chunk_vec = data
+                    .axis_iter(Axis(0))
+                    .into_iter()
+                    .filter(|x| {
+                        (x[0] >= *chunk_triggers.first().unwrap() as f64)
+                            & (x[0] <= *chunk_triggers.last().unwrap() as f64)
+                    })
+                    .flatten()
+                    .collect_vec();
+                // collect all data which belong to one chunk
+                let data_chunk = Array::from_shape_vec(
+                    (chunk_vec.len() / data.ncols(), data.ncols()),
+                    chunk_vec,
+                )
+                .unwrap();
+
+                // https://faraday.ai/blog/saved-by-the-compiler-parallelizing-a-loop-with-rust-and-rayon
+                let chunk_pairs = chunk_triggers
+                    .par_iter()
+                    .map(|trg_nr| {
+                        let trigger_frame_vec = data_chunk
+                            .axis_iter(Axis(0))
+                            .into_iter()
+                            .filter(|x| *x[0] == *trg_nr as f64)
+                            .flatten()
+                            .collect_vec();
+                        let trigger_frame = Array::from_shape_vec(
+                            (trigger_frame_vec.len() / data.ncols(), data.ncols()),
+                            trigger_frame_vec,
+                        )
+                        .unwrap();
+
+                        /* calculate covariance */
+                        let mut pairs = Vec::with_capacity(trigger_frame.nrows() / 5);
+                        for (p1, x) in trigger_frame.axis_iter(Axis(0)).enumerate() {
+                            let p2 = p1 + 1;
+                            let idx_x = *x[1];
+                            let px = *x[2];
+                            let py = *x[3];
+                            let pz = *x[4];
+                            let m1 = *x[6];
+
+                            let row = trigger_frame.slice(s![p2.., ..]);
+                            let a = row
+                                .axis_iter(Axis(0))
+                                .into_iter()
+                                .filter(|&x| {
+                                    let p_sum = ((*x[2] + *px).powf(2.)
+                                        + (*x[3] + *py).powf(2.)
+                                        + (*x[4] + *pz).powf(2.));
+                                    let m2 = *x[6];
+
+                                    // apply for mass specific momentum cut
+                                    for i in (0..mp_cut.nrows()).into_iter() {
+                                        if m1 >= &mp_cut[[i, 0]] && m1 < &mp_cut[[i, 1]] && 
+                                           m2 >= &mp_cut[[i, 2]] && m2 < &mp_cut[[i, 3]]
+                                        {
+                                            if p_sum <= mp_cut[[i, 4]] { return true }
+                                            else { return false }
+                                        }
+                                    }
+                                    // apply for all other chases
+                                    if p_sum <= default_momentum_cut {
+                                        return true;
+                                    }
+                                    false
+                                })
+                                .map(|x| x[1])
+                                .collect_vec();
+
+                            for idx_y in a {
+                                pairs.push([*idx_x, **idx_y]);
+                            }
+                        }
+
+                        /* calculate the background */
+                        // inititalise random number generator
+                        let mut rng = rand::thread_rng();
+                        let trg_frame_indizes = trigger_frame.slice(s![.., 1]);
+                        let bg_frame_idx = get_bg_idx(&mut rng, trg_frame_indizes, data.nrows());
+                        let bg_frame = data.select(Axis(0), &bg_frame_idx);
+                        let mut pairs_bg = Vec::with_capacity(trigger_frame.nrows() / 5);
+                        for (p1, x) in bg_frame.axis_iter(Axis(0)).enumerate() {
+                            let p2 = p1 + 1;
+                            let idx_x = x[1];
+                            let px = x[2];
+                            let py = x[3];
+                            let pz = x[4];
+                            let tof = x[5];
+                            let m1 = x[6];
+
+                            let row = trigger_frame.slice(s![p2.., ..]);
+                            let a = row
+                                .axis_iter(Axis(0))
+                                .into_iter()
+                                .filter(|&x| {
+                                    let p_sum = ((*x[2] + px).powf(2.)
+                                        + (*x[3] + py).powf(2.)
+                                        + (*x[4] + pz).powf(2.));
+                                    let m2 = *x[6];
+
+                                    // apply for mass specific momentum cut
+                                    for i in (0..mp_cut.nrows()).into_iter() {
+                                        if m1 >= mp_cut[[i, 0]] && m1 < mp_cut[[i, 1]] && 
+                                           m2 >= &mp_cut[[i, 2]] && m2 < &mp_cut[[i, 3]]
+                                        {
+                                            if p_sum <= mp_cut[[i, 4]] { return true; }
+                                            else { return false; }
+                                        }
+                                    }
+                                    // apply for all other chases
+                                    if p_sum <= default_momentum_cut {
+                                        return true;
+                                    }
+                                    false
+                                })
+                                .map(|x| (x[1], x[5]))
+                                .collect_vec();
+
+                            for (idx_y, tof_y) in a {
+                                if tof <= **tof_y {
+                                    pairs_bg.push([idx_x, **idx_y]);
+                                } else {
+                                    pairs_bg.push([**idx_y, idx_x]);
+                                }
+                            }
+                        }
+
+                        (pairs, pairs_bg)
+                    })
+                    .collect::<Vec<_>>();
+
+                let mut fg = Vec::<[f64; 2]>::with_capacity(chunk_pairs.len());
+                let mut bg = Vec::<[f64; 2]>::with_capacity(chunk_pairs.len());
+                for i in chunk_pairs.into_iter() {
+                    for j in i.0 {
+                        fg.push(j);
+                    }
+                    for j in i.1 {
+                        bg.push(j)
+                    }
+                }
+
+                //chunk_pairs.into_iter().flatten().collect::<Vec<_>>()
+                (fg, bg)
+                //vec![1., 2., 3.]
+            })
+            .collect::<Vec<_>>();
+
+        //let b = all_pairs.into_iter().flatten().collect::<Vec<_>>();
+
+        let mut fg = Vec::<[f64; 2]>::with_capacity(data.nrows() / 5); // 1/5 is data, not sure how good this guess is
+        let mut bg = Vec::<[f64; 2]>::with_capacity(data.nrows() / 10); // 1/10 is bg
+        for i in all_pairs.into_iter() {
+            for j in i.0 {
+                fg.push(j);
+            }
+            for j in i.1 {
+                bg.push(j)
+            }
+        }
+
+        let a = Array2::from(fg).to_pyarray(py);
+        let b = Array2::from(bg).to_pyarray(py);
+        Ok((a, b))
+
+        //let a_hist = Array1::from_vec(vec![1.,2.,3.,4.]).into_shape((2,2)).unwrap();
+        //Ok((a_hist
+        //    .to_pyarray(py)))
+    }
+
     /// generate array of random numbers and check if none are double with reference list
     fn get_bg_idx(
         rng: &mut ThreadRng,
@@ -596,7 +806,11 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
 
     /// simple test function
     #[pyfn(m)]
-    fn hallo<'py>(py: Python<'py>, num: i64) -> PyResult<(Vec<[f64; 2]>, Vec<[f64; 2]>)> {
+    fn hallo<'py>(
+        py: Python<'py>,
+        mass_momentum_cut: PyReadonlyArray2<'py, f64>,
+        num: i64,
+    ) -> PyResult<(Vec<[f64; 2]>, Vec<[f64; 2]>)> {
         println!("hallo {:?}", num);
         let mut fg = Vec::<[f64; 2]>::with_capacity(5);
         fg.push([1.1, num as f64]);
@@ -605,6 +819,11 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
 
         let a = Array2::from(fg.clone()).to_pyarray(py);
         let b = Array2::from(bg.clone()).to_pyarray(py);
+
+        let mp_cut = mass_momentum_cut.as_array();
+        for i in (0..mp_cut.nrows()).into_iter() {
+            dbg!(mp_cut[[i, 0]]);
+        }
         //Ok((a, b))  // returns a (array, array)
         Ok((fg, bg)) // returns a (list, list)
     }
@@ -936,6 +1155,204 @@ pub fn get_pairs_bench(
     //    .unwrap();
 
     //a_hist.slice(s![1..n_bins + 1, 1..n_bins + 1]).to_owned()
+}
+
+pub fn get_covar_pairs_fixed_cut(
+    x: Array2<f64>,
+    mass_momentum_cut: Array2<f64>,
+    default_momentum_cut: f64,
+) -> (Vec<[f64; 2]>, Vec<[f64; 2]>) {
+    let data = x;
+    let mp_cut = mass_momentum_cut;
+
+    let data_trigger = data.column(0);
+
+    //let trigger_nrs = data.slice(s![..,0]).iter().map(|x| *x as i64).unique().collect_vec();
+    // vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ...]
+    let trigger_nrs = data_trigger
+        .iter()
+        .map(|x| *x as i64)
+        .unique()
+        .collect_vec();
+    let num_triggers = trigger_nrs.len();
+    let num_cores = 1;//num_cpus::get() - 1;
+
+    // iterate over chunks, the computation of a chunk should be pushed into a thread
+    // chunks are defined as group of triggers, the size is determined by the number of CPU cores
+    // chunksize determines the size of the chunk, so if we want to unload all data evenly onto the cores
+    // we need to do `num_trigger / num_cores`
+    // `chunk_triggers` will contain the trigger number which belong to a chunk
+    // chunk_triggers = (142) &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ...]
+    //for chunk_triggers in trigger_nrs.chunks(num_triggers / num_cores) {
+    let all_pairs = trigger_nrs
+        .chunks(num_triggers / num_cores)
+        .map(|chunk_triggers| {
+            // TODO: check this to make this nicer: https://docs.rs/ndarray/latest/ndarray/struct.ArrayBase.html#conversions-from-nested-vecsarrays
+            // collect all data which belong to a chunk in a "DataFrame"
+            let chunk_vec = data
+                .axis_iter(Axis(0))
+                .into_iter()
+                .filter(|x| {
+                    (x[0] >= *chunk_triggers.first().unwrap() as f64)
+                        & (x[0] <= *chunk_triggers.last().unwrap() as f64)
+                })
+                .flatten()
+                .collect_vec();
+            // collect all data which belong to one chunk
+            let data_chunk = Array::from_shape_vec(
+                (chunk_vec.len() / data.ncols(), data.ncols()),
+                chunk_vec,
+            )
+            .unwrap();
+
+            // https://faraday.ai/blog/saved-by-the-compiler-parallelizing-a-loop-with-rust-and-rayon
+            let chunk_pairs = chunk_triggers
+                .iter()//par_iter
+                .map(|trg_nr| {
+                    let trigger_frame_vec = data_chunk
+                        .axis_iter(Axis(0))
+                        .into_iter()
+                        .filter(|x| *x[0] == *trg_nr as f64)
+                        .flatten()
+                        .collect_vec();
+                    let trigger_frame = Array::from_shape_vec(
+                        (trigger_frame_vec.len() / data.ncols(), data.ncols()),
+                        trigger_frame_vec,
+                    )
+                    .unwrap();
+
+                    /* calculate covariance */
+                    let mut pairs = Vec::with_capacity(trigger_frame.nrows() / 5);
+                    for (p1, x) in trigger_frame.axis_iter(Axis(0)).enumerate() {
+                        let p2 = p1 + 1;
+                        let idx_x = *x[1];
+                        let px = *x[2];
+                        let py = *x[3];
+                        let pz = *x[4];
+                        let m1 = *x[6];
+
+                        let row = trigger_frame.slice(s![p2.., ..]);
+                        let a = row
+                            .axis_iter(Axis(0))
+                            .into_iter()
+                            .filter(|&x| {
+                                let p_sum = (*x[2] + *px).powf(2.)
+                                    + (*x[3] + *py).powf(2.)
+                                    + (*x[4] + *pz).powf(2.);
+                                let m2 = *x[6];
+
+                                // apply for mass specific momentum cut
+                                for i in (0..mp_cut.nrows()).into_iter() {
+                                    if m1 >= &mp_cut[[i, 0]] && m1 < &mp_cut[[i, 1]] && 
+                                       m2 >= &mp_cut[[i, 2]] && m2 < &mp_cut[[i, 3]]
+                                    {
+                                        if p_sum <= mp_cut[[i, 4]] { return true; }
+                                        else { return false; }
+                                    }
+                                }
+                                // apply for all other chases
+                                if p_sum <= default_momentum_cut {
+                                    return true
+                                }
+                                false
+                            })
+                            .map(|x| x[1])
+                            .collect_vec();
+
+                        for idx_y in a {
+                            dbg!(idx_x, &idx_y);
+                            pairs.push([*idx_x, **idx_y]);
+                        }
+                    }
+
+                    /* calculate the background */
+                    // inititalise random number generator
+                    let mut rng = rand::thread_rng();
+                    let trg_frame_indizes = trigger_frame.slice(s![.., 1]);
+                    dbg!(&trg_frame_indizes);
+                    let bg_frame_idx = get_bg_idx(&mut rng, trg_frame_indizes, data.nrows());
+                    let bg_frame = data.select(Axis(0), &bg_frame_idx);
+                    let mut pairs_bg = Vec::with_capacity(trigger_frame.nrows() / 5);
+                    for (p1, x) in bg_frame.axis_iter(Axis(0)).enumerate() {
+                        let p2 = p1 + 1;
+                        let idx_x = x[1];
+                        let px = x[2];
+                        let py = x[3];
+                        let pz = x[4];
+                        let tof = x[5];
+                        let m1 = x[6];
+
+                        let row = trigger_frame.slice(s![p2.., ..]);
+                        let a = row
+                            .axis_iter(Axis(0))
+                            .into_iter()
+                            .filter(|&x| {
+                                let p_sum = ((*x[2] + px).powf(2.)
+                                    + (*x[3] + py).powf(2.)
+                                    + (*x[4] + pz).powf(2.));
+                                let m2 = *x[6];
+
+                                // apply for mass specific momentum cut
+                                for i in (0..mp_cut.nrows()).into_iter() {
+                                    if m1 >= mp_cut[[i, 0]] && m1 < mp_cut[[i, 1]] && 
+                                       m2 >= &mp_cut[[i, 2]] && m2 < &mp_cut[[i, 3]]
+                                    {
+                                        if p_sum <= mp_cut[[i, 4]] { return true; }
+                                        else { return false; };
+                                    }
+                                }
+                                // apply for all other chases
+                                if p_sum <= default_momentum_cut {
+                                    return true;
+                                }
+                                false
+                            })
+                            .map(|x| (x[1], x[5]))
+                            .collect_vec();
+
+                        for (idx_y, tof_y) in a {
+                            if tof <= **tof_y {
+                                pairs_bg.push([idx_x, **idx_y]);
+                            } else {
+                                pairs_bg.push([**idx_y, idx_x]);
+                            }
+                        }
+                    }
+
+                    (pairs, pairs_bg)
+                })
+                .collect::<Vec<_>>();
+
+            let mut fg = Vec::<[f64; 2]>::with_capacity(chunk_pairs.len());
+            let mut bg = Vec::<[f64; 2]>::with_capacity(chunk_pairs.len());
+            for i in chunk_pairs.into_iter() {
+                for j in i.0 {
+                    fg.push(j);
+                }
+                for j in i.1 {
+                    bg.push(j)
+                }
+            }
+
+            //chunk_pairs.into_iter().flatten().collect::<Vec<_>>()
+            (fg, bg)
+            //vec![1., 2., 3.]
+        })
+        .collect::<Vec<_>>();
+
+
+    let mut fg = Vec::<[f64; 2]>::with_capacity(data.nrows() / 5); // 1/5 is data, not sure how good this guess is
+    let mut bg = Vec::<[f64; 2]>::with_capacity(data.nrows() / 10); // 1/10 is bg
+    for i in all_pairs.into_iter() {
+        for j in i.0 {
+            fg.push(j);
+        }
+        for j in i.1 {
+            bg.push(j)
+        }
+    }
+
+    (fg, bg)
 }
 
 pub fn ndarray_filter_momentum_bench_par_outer(
