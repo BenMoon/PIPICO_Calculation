@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use itertools::Itertools;
-use ndarray::{s, Array, ArrayBase, ArrayView, Axis};
+use ndarray::{s, Array, Axis};
 use pipico;
 
 use polars::prelude::*;
@@ -13,11 +13,11 @@ use polars::prelude::*;
 pub fn criterion_benchmark(c: &mut Criterion) {
     // open file
     let mut file = std::fs::File::open(
-        "/Users/brombh/data/programm/rust/pipico_simple_example/tests/test_data-1e3-1e1.parquet",
+        "/Users/brombh/data/programm/rust/pipico_simple_example/tests/test_data-1e3-1e1.feather",
     )
     .expect("File not found");
     // read to DataFrame
-    let df = ParquetReader::new(&mut file).finish().unwrap();
+    let df = IpcReader::new(file).finish().unwrap();
     dbg!(df.shape());
 
     let df_tof = df
@@ -37,20 +37,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     });
     thread::sleep(Duration::from_secs(10));
 
-    c.bench_function("par_iter inner", |b| {
-        b.iter(|| pipico::ndarray_filter_momentum_bench_2D(black_box(df_tof.clone())))
-    });
-    thread::sleep(Duration::from_secs(10));
 
-    c.bench_function("par_iter outer", |b| {
-        b.iter(|| pipico::ndarray_filter_momentum_bench_par_outer(black_box(df_tof.clone())))
-    });
-    thread::sleep(Duration::from_secs(10));
-
-    c.bench_function("2D array: outer for", |b| {
-        b.iter(|| pipico::ndarray_filter_momentum_bench_outer_for(black_box(df_tof.clone())))
-    });
-     
 }
 
 // benchmark get background with index
@@ -61,11 +48,11 @@ pub fn criterion_get_bg_idx(c: &mut Criterion) {
     // ArrayBase<ViewRepr<&&&f64>, Dim<[usize; 1]>>
     // required for the get_bg_idx
     let mut file = std::fs::File::open(
-        "/Users/brombh/data/programm/rust/pipico_simple_example/tests/test_data-1e3-1e1.parquet",
+        "/Users/brombh/data/programm/rust/pipico_simple_example/tests/test_data-1e3-1e1.feather",
     )
     .expect("file not found");
     // read to DataFrame
-    let df = ParquetReader::new(&mut file).finish().unwrap();
+    let df = IpcReader::new(file).finish().unwrap();
 
     //let trigger_frame = Array::from_shape_vec((100, 2), (100..300).into_iter().map(|x| x as f64).collect_vec()).expect("shape incorrect");
     let data = df

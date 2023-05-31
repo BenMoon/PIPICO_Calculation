@@ -21,7 +21,7 @@ ndarray-rand = "0.14.0"
 pyo3 = { version = "0.18", features = ["extension-module"] }
 numpy = "*"
 rayon = "1.7"
-polars = {version="0.28", features = ["parquet", "ndarray"]}
+polars = {version="0.28", features = ["ndarray"]}
 #pyo3-polars = {version = "*"}
 num_cpus = "*"
 
@@ -29,7 +29,7 @@ num_cpus = "*"
 pyo3-build-config = "*"
 
 [dev-dependencies]
-criterion = "0.4.0"
+criterion = "0.5"
 #memuse = "*"
 
 # https://doc.rust-lang.org/cargo/reference/profiles.html
