@@ -1,9 +1,9 @@
-#![feature(iter_collect_into)]
+//#![feature(iter_collect_into)]
 
-use std::collections::HashSet;
 use rand::rngs::ThreadRng;
 use rand::{self, Rng};
-use std::{usize};
+use std::collections::HashSet;
+use std::usize;
 
 use itertools::Itertools;
 use ndarray::parallel::prelude::*;
@@ -19,7 +19,6 @@ use rayon::prelude::*;
 /// calculate a covariance map
 #[pymodule]
 fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
-
     /// toy code remaining for demonstration purposes
     /// calculate a covariance map
     /// x: list of lists with a ToF trace in every row, pre-sorting not required
@@ -91,7 +90,6 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         //let dummy = Array::<f64,_>::zeros((10, 10));
         //Ok(dummy.into_pyarray(py))
     }
-
 
     /// deprecated
     /// calculate a covariance map, directly returning the histogram, only considering px and py, no background subtraction
@@ -353,7 +351,6 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
             })
             .collect::<Vec<_>>();
 
-
         let mut fg = Vec::<[f64; 2]>::with_capacity(data.nrows() / 5); // 1/5 is data, not sure how good this guess is
         let mut bg = Vec::<[f64; 2]>::with_capacity(data.nrows() / 10); // 1/10 is bg
         for i in all_pairs.into_iter() {
@@ -368,8 +365,6 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         let a = Array2::from(fg).to_pyarray(py);
         let b = Array2::from(bg).to_pyarray(py);
         Ok((a, b))
-
-
     }
 
     /// Extract ion pairs fulfilling the condition of a 3D momentum conservation
@@ -403,7 +398,7 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
             .unique()
             .collect_vec();
         let num_triggers = trigger_nrs.len();
-        let num_cores = 1;//num_cpus::get() - 1;
+        let num_cores = 1; //num_cpus::get() - 1;
 
         // iterate over chunks, the computation of a chunk should be pushed into a thread
         // chunks are defined as group of triggers, the size is determined by the number of CPU cores
@@ -471,11 +466,16 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
 
                                     // apply for mass specific momentum cut
                                     for i in (0..mp_cut.nrows()).into_iter() {
-                                        if m1 >= &mp_cut[[i, 0]] && m1 < &mp_cut[[i, 1]] && 
-                                           m2 >= &mp_cut[[i, 2]] && m2 < &mp_cut[[i, 3]]
+                                        if m1 >= &mp_cut[[i, 0]]
+                                            && m1 < &mp_cut[[i, 1]]
+                                            && m2 >= &mp_cut[[i, 2]]
+                                            && m2 < &mp_cut[[i, 3]]
                                         {
-                                            if p_sum <= mp_cut[[i, 4]] { return true }
-                                            else { return false }
+                                            if p_sum <= mp_cut[[i, 4]] {
+                                                return true;
+                                            } else {
+                                                return false;
+                                            }
                                         }
                                     }
                                     // apply for all other chases
@@ -520,11 +520,16 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
 
                                     // apply for mass specific momentum cut
                                     for i in (0..mp_cut.nrows()).into_iter() {
-                                        if m1 >= mp_cut[[i, 0]] && m1 < mp_cut[[i, 1]] && 
-                                           m2 >= &mp_cut[[i, 2]] && m2 < &mp_cut[[i, 3]]
+                                        if m1 >= mp_cut[[i, 0]]
+                                            && m1 < mp_cut[[i, 1]]
+                                            && m2 >= &mp_cut[[i, 2]]
+                                            && m2 < &mp_cut[[i, 3]]
                                         {
-                                            if p_sum <= mp_cut[[i, 4]] { return true; }
-                                            else { return false; }
+                                            if p_sum <= mp_cut[[i, 4]] {
+                                                return true;
+                                            } else {
+                                                return false;
+                                            }
                                         }
                                     }
                                     // apply for all other chases
@@ -768,9 +773,7 @@ pub fn ndarray_filter_momentum_bench_2D(
 }
 
 /// rust implementation for benchmarking
-pub fn get_pairs_bench(
-    data: Array2<f64>,
-) -> (Vec<[f64; 2]>, Vec<[f64; 2]>) {
+pub fn get_pairs_bench(data: Array2<f64>) -> (Vec<[f64; 2]>, Vec<[f64; 2]>) {
     let filter_delta = 0.01;
     let n_bins = 10;
     let hist_min = 0.;
@@ -942,7 +945,7 @@ pub fn get_covar_pairs_fixed_cut(
         .unique()
         .collect_vec();
     let num_triggers = trigger_nrs.len();
-    let num_cores = 1;//num_cpus::get() - 1;
+    let num_cores = 1; //num_cpus::get() - 1;
 
     // iterate over chunks, the computation of a chunk should be pushed into a thread
     // chunks are defined as group of triggers, the size is determined by the number of CPU cores
@@ -966,15 +969,13 @@ pub fn get_covar_pairs_fixed_cut(
                 .flatten()
                 .collect_vec();
             // collect all data which belong to one chunk
-            let data_chunk = Array::from_shape_vec(
-                (chunk_vec.len() / data.ncols(), data.ncols()),
-                chunk_vec,
-            )
-            .unwrap();
+            let data_chunk =
+                Array::from_shape_vec((chunk_vec.len() / data.ncols(), data.ncols()), chunk_vec)
+                    .unwrap();
 
             // https://faraday.ai/blog/saved-by-the-compiler-parallelizing-a-loop-with-rust-and-rayon
             let chunk_pairs = chunk_triggers
-                .iter()//par_iter
+                .iter() //par_iter
                 .map(|trg_nr| {
                     let trigger_frame_vec = data_chunk
                         .axis_iter(Axis(0))
@@ -1010,16 +1011,21 @@ pub fn get_covar_pairs_fixed_cut(
 
                                 // apply for mass specific momentum cut
                                 for i in (0..mp_cut.nrows()).into_iter() {
-                                    if m1 >= &mp_cut[[i, 0]] && m1 < &mp_cut[[i, 1]] && 
-                                       m2 >= &mp_cut[[i, 2]] && m2 < &mp_cut[[i, 3]]
+                                    if m1 >= &mp_cut[[i, 0]]
+                                        && m1 < &mp_cut[[i, 1]]
+                                        && m2 >= &mp_cut[[i, 2]]
+                                        && m2 < &mp_cut[[i, 3]]
                                     {
-                                        if p_sum <= mp_cut[[i, 4]] { return true; }
-                                        else { return false; }
+                                        if p_sum <= mp_cut[[i, 4]] {
+                                            return true;
+                                        } else {
+                                            return false;
+                                        }
                                     }
                                 }
                                 // apply for all other chases
                                 if p_sum <= default_momentum_cut {
-                                    return true
+                                    return true;
                                 }
                                 false
                             })
@@ -1061,11 +1067,16 @@ pub fn get_covar_pairs_fixed_cut(
 
                                 // apply for mass specific momentum cut
                                 for i in (0..mp_cut.nrows()).into_iter() {
-                                    if m1 >= mp_cut[[i, 0]] && m1 < mp_cut[[i, 1]] && 
-                                       m2 >= &mp_cut[[i, 2]] && m2 < &mp_cut[[i, 3]]
+                                    if m1 >= mp_cut[[i, 0]]
+                                        && m1 < mp_cut[[i, 1]]
+                                        && m2 >= &mp_cut[[i, 2]]
+                                        && m2 < &mp_cut[[i, 3]]
                                     {
-                                        if p_sum <= mp_cut[[i, 4]] { return true; }
-                                        else { return false; };
+                                        if p_sum <= mp_cut[[i, 4]] {
+                                            return true;
+                                        } else {
+                                            return false;
+                                        };
                                     }
                                 }
                                 // apply for all other chases
@@ -1105,7 +1116,6 @@ pub fn get_covar_pairs_fixed_cut(
         })
         .collect::<Vec<_>>();
 
-
     let mut fg = Vec::<[f64; 2]>::with_capacity(data.nrows() / 5); // 1/5 is data, not sure how good this guess is
     let mut bg = Vec::<[f64; 2]>::with_capacity(data.nrows() / 10); // 1/10 is bg
     for i in all_pairs.into_iter() {
@@ -1119,6 +1129,3 @@ pub fn get_covar_pairs_fixed_cut(
 
     (fg, bg)
 }
-
-
-
