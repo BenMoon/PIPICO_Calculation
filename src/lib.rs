@@ -1,6 +1,8 @@
 //#![feature(iter_collect_into)]
 
+use bit_set::BitSet;
 use rand::rngs::ThreadRng;
+
 use rand::{self, Rng};
 use std::collections::HashSet;
 use std::usize;
@@ -12,27 +14,48 @@ use ndarray::{s, Array1, Array2, ViewRepr};
 use ndhistogram::{axis::Uniform, ndhistogram, Histogram};
 use numpy::{PyArray2, PyReadonlyArray2, ToPyArray};
 use pyo3::{pymodule, types::PyModule, PyResult, Python};
-extern crate num_cpus;
 
-use rayon::prelude::*;
+extern crate num_cpus;
 
 /// calculate a covariance map
 #[pymodule]
 fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
-    /// toy code remaining for demonstration purposes
+    /// DEPRECATED, toy code remaining for demonstration purposes
     /// calculate a covariance map
     /// x: list of lists with a ToF trace in every row, pre-sorting not required
     /// nbins: number of bins for map
     /// min: histogram min
     /// max: histogram max
+    /// ```python
+    /// import pipico
+    ///
+    /// bins = 5000
+    /// hist_min = 0
+    /// hist_max = 5
+    ///
+    /// # calculate correlated events
+    /// a = list(df.groupby(['nr'])['tof'].apply(list))
+    /// pipico_map = pipico.pipico_lists(a, bins, hist_min, hist_max)
+    ///
+    /// # calculate un-correlated events
+    /// h_1d = np.histogram(list(df['tof']), bins=bins, range=(hist_min, hist_max))[0] / len(a)
+    /// pipico_bg = h_1d[:, None] * h_1d[None, :]
+    /// j1d = np.arange(bins)
+    /// jx, jy = np.meshgrid(j1d, j1d, indexing="ij")
+    /// pipico_bg[jx <= jy] = 0
+    /// pipico_bg[jx <= jy] = 0
+    ///
+    /// # subtract correlated from uncorrelated map:
+    /// pipico_cov = pipico_map / len(a) - pipico_bg
+    /// ```
     #[pyfn(m)]
-    fn pipico_lists<'py>(
-        py: Python<'py>,
+    fn pipico_lists(
+        py: Python<'_>,
         mut x: Vec<Vec<f64>>,
         n_bins: usize,
         min: f64,
         max: f64,
-    ) -> PyResult<&'py PyArray2<f64>> {
+    ) -> PyResult<&PyArray2<f64>> {
         //let data = x.as_array();
         //let Nshots = data.shape()[0];
         //let mut data = x;
@@ -79,7 +102,7 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         })
         // The .values() part seems to imply there are keys, and it's probably easier to iterate over entries and filter by keys...
          */
-        let a_hist: Array2<f64> = Array1::from_iter(hist.values().map(|v| *v).into_iter())
+        let a_hist: Array2<f64> = Array1::from_iter(hist.values().copied())
             .into_shape((n_bins + 2, n_bins + 2))
             .unwrap();
 
@@ -109,7 +132,6 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         n_bins: usize,
         hist_min: f64,
         hist_max: f64,
-        //) -> PyResult<PyDataFrame> {
     ) -> PyResult<&'py PyArray2<f64>> {
         // x = [trigger nr, mz / tof, px, py] = 4 columns
         // need to get index in here as well, because I want to return the index of the pairs
@@ -135,7 +157,6 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
             // check https://doc.rust-lang.org/nightly/core/iter/trait.Iterator.html#method.position maybe that's a better solution
             let chunk_vec = data
                 .axis_iter(Axis(0))
-                .into_iter()
                 // maybe something like a 'df.query(`trigger nr` in @triggers)',
                 // but as 'trigger nr' needs to be sorted in the first place it probably doesn't matter
                 .filter(|x| {
@@ -159,7 +180,6 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
                 // is it possible to only get the indices for the trigger nr in question and create a view on that slice?
                 let trigger_frame_vec = data_chunk
                     .axis_iter(Axis(0))
-                    .into_iter()
                     .filter(|x| *x[0] == i as f64)
                     .flatten()
                     .collect_vec();
@@ -177,7 +197,6 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
                     let row = trigger_frame.slice(s![p2.., ..]);
                     let a = row
                         .axis_iter(Axis(0))
-                        .into_iter()
                         .filter(|&x| {
                             ((*x[2] + *px).powf(2.) + (*x[3] + *py).powf(2.))
                                 < (*px * *px + *py * *py) * filter_delta
@@ -194,7 +213,7 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
             //dbg!();
         }
 
-        let a_hist: Array2<f64> = Array1::from_iter(hist.values().map(|v| *v).into_iter())
+        let a_hist: Array2<f64> = Array1::from_iter(hist.values().copied())
             .into_shape((n_bins + 2, n_bins + 2))
             .unwrap();
 
@@ -203,9 +222,84 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
             .to_pyarray(py))
     }
 
-    /// Extract ion pairs fulfilling the condition of a 3D momentum conservation
-    /// x: 2D array containing the data [trigger nr, index, px, py, pz, tof]
-    /// momentum_cut: realtiv cut on Newton sphere
+    /// Extract ion pairs fulfilling the condition of a 3D momentum conservation using a relative
+    /// threshold for the momentum conservation.
+    ///
+    /// # Arguments
+    ///
+    /// * `py` - A Python context required for creating PyArray2 objects.
+    /// * `x` - Input data as a 2D array of 64-bit floating-point numbers.
+    /// * `momentum_cut` - A floating-point number used to determine the criteria for filtering
+    ///    pairs representing a Newton-sphere.
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing two PyArray2 objects representing covariance pairs and background pairs.
+    ///
+    /// # Input Data Format:
+    ///
+    /// The input data (`x`) is expected to be a 2D array, where each row represents a set of
+    /// measurements.
+    /// The first column is assumed to contain trigger numbers, and the subsequent columns contain
+    /// measurement data.
+    /// 2D array containing the data [trigger nr, index, px, py, pz, tof] index is the pandas
+    /// DataFrame index.
+    ///
+    /// # Parallel Processing
+    ///
+    /// This function divides the input data into chunks and processes them in parallel
+    /// optimizing performance on multi-core CPUs.
+    ///
+    /// # Performance Considerations
+    ///
+    /// This function is designed for performance optimization, utilizing parallel processing and
+    /// efficient data handling to compute covariance pairs and background pairs from large datasets.
+    ///
+    /// # Example Usage
+    ///
+    /// Here is an example of how to use this function in a Python application:
+    ///
+    /// ```python
+    /// import pipico
+    /// # import numpy, pandas, polars
+    ///
+    /// def sort_pairs(df: pd.DataFrame, pairs: np.array, pairs_bg: np.array) -> (pd.DataFrame, pd.DataFrame):
+    ///     # forground
+    ///     df_p1 = df.loc[pairs[:, 0]].copy()
+    ///     df_p2 = df.loc[pairs[:, 1]].copy()
+    ///     df_p1.reset_index(drop=True, inplace=True)
+    ///     df_p2.reset_index(drop=True, inplace=True)
+    ///     df_p1 = df_p1.add_suffix("1")
+    ///     df_p2 = df_p2.add_suffix("2")
+    ///     df_pairs = pd.concat([df_p1, df_p2], axis=1)
+    ///
+    ///     # Background
+    ///     df_p1 = df.loc[pairs_bg[:, 0]].copy()
+    ///     df_p2 = df.loc[pairs_bg[:, 1]].copy()
+    ///     df_p1.reset_index(drop=True, inplace=True)
+    ///     df_p2.reset_index(drop=True, inplace=True)
+    ///     df_p1 = df_p1.add_suffix("1")
+    ///     df_p2 = df_p2.add_suffix("2")
+    ///     df_pairs_bg = pd.concat([df_p1, df_p2], axis=1)
+    ///
+    ///     return df_pairs, df_pairs_bg
+    ///
+    /// # prepare the data
+    /// df_snowman.sort_values(['trigger nr', 'tof'], inplace=True)
+    /// df_snowman.reset_index(inplace=True, drop=True)
+    /// df_snowman['idx'] = df_snowman.index
+    ///
+    /// # Call the Rust function
+    /// da = pl.from_pandas(df)[['trigger nr', 'idx', 'p_x', 'p_y', 'p_z', 'tof', 'mz']].to_numpy()
+    /// pairs_fg, pairs_bg = pipico.get_covar_pairs(x=da, momentum_cut=3)
+    ///
+    /// # Use the resulting covariance and background pairs as needed
+    /// df_pairs_fg, df_pairs_bg = sort_pairs(df_snowman, pairs_fg, pairs_bg)
+    /// bins = np.linspace(15, 21, 200)
+    /// xy_hist, x_bins, y_bins = np.histogram2d(df_pairs_fg['mz1'], df_pairs_fg['mz2'], bins=bins)
+    /// xy_hist_bg, x_bins, y_bins = np.histogram2d(df_pairs_bg['mz1'], df_pairs_bg['mz2'], bins=bins)
+    /// rasterize(hv.Image((xy_hist - xy_hist_bg).T[::-1], bounds=[x_bins[0], y_bins[0], x_bins[-1], y_bins[-1]]).opts(xlabel='m_1/q_1', ylabel='m_2/q_2', title=f'relative cut={p_cut}\n{git_info()}'))
+    /// ```
     #[pyfn(m)]
     fn get_covar_pairs<'py>(
         py: Python<'py>,
@@ -238,7 +332,6 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
                 // collect all data which belong to a chunk in a "DataFrame"
                 let chunk_vec = data
                     .axis_iter(Axis(0))
-                    .into_iter()
                     .filter(|x| {
                         (x[0] >= *chunk_triggers.first().unwrap() as f64)
                             & (x[0] <= *chunk_triggers.last().unwrap() as f64)
@@ -258,7 +351,6 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
                     .map(|trg_nr| {
                         let trigger_frame_vec = data_chunk
                             .axis_iter(Axis(0))
-                            .into_iter()
                             .filter(|x| *x[0] == *trg_nr as f64)
                             .flatten()
                             .collect_vec();
@@ -280,7 +372,6 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
                             let row = trigger_frame.slice(s![p2.., ..]);
                             let a = row
                                 .axis_iter(Axis(0))
-                                .into_iter()
                                 .filter(|&x| {
                                     ((*x[2] + *px).powf(2.)
                                         + (*x[3] + *py).powf(2.)
@@ -313,7 +404,6 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
                             let row = trigger_frame.slice(s![p2.., ..]);
                             let a = row
                                 .axis_iter(Axis(0))
-                                .into_iter()
                                 .filter(|&x| {
                                     ((*x[2] + px).powf(2.)
                                         + (*x[3] + py).powf(2.)
@@ -367,17 +457,80 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         Ok((a, b))
     }
 
-    /// Extract ion pairs fulfilling the condition of a 3D momentum conservation
-    /// x: 2D array containing the data [trigger nr, index, px, py, pz, tof, mass]
-    /// mass_momentum_cut: px+py+pz <= mass_momentum_cut for masses define in this array, e.g.
+    /// Extract ion pairs fulfilling a 3D momentum conservation condition.
+    ///
+    /// This function processes a 2D array of data, where each row contains information
+    /// about trigger numbers, indices, momenta (px, py, pz), time-of-flight (tof), and mass.
+    ///
+    /// The `mass_momentum_cut` parameter is used to specify momentum cuts based on mass ranges.
+    /// It should be a 2D array with each row having five values: [min_mass, max_mass, min_px, max_px, max_momentum^2].
+    ///
+    /// The `default_momentum_cut` parameter defines a momentum sphere for all other masses.
+    ///
+    /// The function extracts ion pairs that satisfy the specified momentum conservation conditions,
+    /// and it performs these operations in parallel to leverage multi-core processing.
+    ///
+    /// # Arguments
+    ///
+    /// - `x`: A 2D array containing the input data: [trigger nr, index, px, py, pz, tof, mass]
+    /// - `mass_momentum_cut`: A 2D array specifying momentum cuts based on mass ranges.
+    ///   `px+py+pz <= mass_momentum_cut` for masses define in this array, e.g.
+    /// - `default_momentum_cut`: A floating-point value for the default momentum cut.
+    ///    momentum sphere which applies for all other masses
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing two 2D arrays: the first array contains foreground ion pairs,
+    /// and the second array contains background ion pairs.
+    ///
+    /// Both arrays are represented as arrays of floating-point values.
+    ///
+    /// # Example
+    ///
+    /// ```python
+    /// import pipico
+    /// # import numpy, pandas, polars
+    ///
+    /// def sort_pairs(df: pd.DataFrame, pairs: np.array, pairs_bg: np.array) -> (pd.DataFrame, pd.DataFrame):
+    ///     # forground
+    ///     df_p1 = df.loc[pairs[:, 0]].copy()
+    ///     df_p2 = df.loc[pairs[:, 1]].copy()
+    ///     df_p1.reset_index(drop=True, inplace=True)
+    ///     df_p2.reset_index(drop=True, inplace=True)
+    ///     df_p1 = df_p1.add_suffix("1")
+    ///     df_p2 = df_p2.add_suffix("2")
+    ///     df_pairs = pd.concat([df_p1, df_p2], axis=1)
+    ///
+    ///     # Background
+    ///     df_p1 = df.loc[pairs_bg[:, 0]].copy()
+    ///     df_p2 = df.loc[pairs_bg[:, 1]].copy()
+    ///     df_p1.reset_index(drop=True, inplace=True)
+    ///     df_p2.reset_index(drop=True, inplace=True)
+    ///     df_p1 = df_p1.add_suffix("1")
+    ///     df_p2 = df_p2.add_suffix("2")
+    ///     df_pairs_bg = pd.concat([df_p1, df_p2], axis=1)
+    ///
+    ///     return df_pairs, df_pairs_bg
+    ///
+    /// # prepare the data
+    /// df_snowman.sort_values(['trigger nr', 'tof'], inplace=True)
+    /// df_snowman.reset_index(inplace=True, drop=True)
+    /// df_snowman['idx'] = df_snowman.index
+    ///
+    /// # Call the Rust function
+    /// da = pl.from_pandas(df)[['trigger nr', 'idx', 'p_x', 'p_y', 'p_z', 'tof', 'mz']].to_numpy()
+    /// pairs_fg, pairs_bg = pipico.get_covar_pairs_fixed_cut(x=da, momentum_cut=3e4)
+    ///
+    /// # Use the resulting covariance and background pairs as needed
+    /// df_pairs_fg, df_pairs_bg = sort_pairs(df_snowman, pairs_fg, pairs_bg)
+    /// bins = np.linspace(15, 21, 200)
+    /// xy_hist, x_bins, y_bins = np.histogram2d(df_pairs_fg['mz1'], df_pairs_fg['mz2'], bins=bins)
+    /// xy_hist_bg, x_bins, y_bins = np.histogram2d(df_pairs_bg['mz1'], df_pairs_bg['mz2'], bins=bins)
+    /// rasterize(hv.Image((xy_hist - xy_hist_bg).T[::-1], bounds=[x_bins[0], y_bins[0], x_bins[-1], y_bins[-1]]).opts(xlabel='m_1/q_1', ylabel='m_2/q_2', title=f'relative cut={p_cut}\n{git_info()}'))
     /// ```
-    ///     mass_momementum_cut = np.array(
-    ///         [[17.5, 18.5, 17.5, 18.5, 1e1**2],
-    ///         [16.5, 17.5, 17.5, 18.5, 2.9e1**2],
-    ///         [16.5, 17.5, 18.5, 19.5, 9.7e1**2]])
-    ///     default_momentum_cut = 3e5**2
-    /// ```
-    /// default_momentum_cut: momentum sphere which applies for all other masses
+    ///
+    /// The `fg_pairs` array will contain foreground ion pairs, and the `bg_pairs` array will
+    /// contain background ion pairs.
     #[pyfn(m)]
     fn get_covar_pairs_fixed_cut<'py>(
         py: Python<'py>,
@@ -414,7 +567,6 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
                 // collect all data which belong to a chunk in a "DataFrame"
                 let chunk_vec = data
                     .axis_iter(Axis(0))
-                    .into_iter()
                     .filter(|x| {
                         (x[0] >= *chunk_triggers.first().unwrap() as f64)
                             & (x[0] <= *chunk_triggers.last().unwrap() as f64)
@@ -434,7 +586,6 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
                     .map(|trg_nr| {
                         let trigger_frame_vec = data_chunk
                             .axis_iter(Axis(0))
-                            .into_iter()
                             .filter(|x| *x[0] == *trg_nr as f64)
                             .flatten()
                             .collect_vec();
@@ -457,25 +608,20 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
                             let row = trigger_frame.slice(s![p2.., ..]);
                             let a = row
                                 .axis_iter(Axis(0))
-                                .into_iter()
                                 .filter(|&x| {
-                                    let p_sum = ((*x[2] + *px).powf(2.)
+                                    let p_sum = (*x[2] + *px).powf(2.)
                                         + (*x[3] + *py).powf(2.)
-                                        + (*x[4] + *pz).powf(2.));
+                                        + (*x[4] + *pz).powf(2.);
                                     let m2 = *x[6];
 
                                     // apply for mass specific momentum cut
-                                    for i in (0..mp_cut.nrows()).into_iter() {
+                                    for i in 0..mp_cut.nrows() {
                                         if m1 >= &mp_cut[[i, 0]]
                                             && m1 < &mp_cut[[i, 1]]
                                             && m2 >= &mp_cut[[i, 2]]
                                             && m2 < &mp_cut[[i, 3]]
                                         {
-                                            if p_sum <= mp_cut[[i, 4]] {
-                                                return true;
-                                            } else {
-                                                return false;
-                                            }
+                                            return p_sum <= mp_cut[[i, 4]];
                                         }
                                     }
                                     // apply for all other chases
@@ -511,25 +657,20 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
                             let row = trigger_frame.slice(s![p2.., ..]);
                             let a = row
                                 .axis_iter(Axis(0))
-                                .into_iter()
                                 .filter(|&x| {
-                                    let p_sum = ((*x[2] + px).powf(2.)
+                                    let p_sum = (*x[2] + px).powf(2.)
                                         + (*x[3] + py).powf(2.)
-                                        + (*x[4] + pz).powf(2.));
+                                        + (*x[4] + pz).powf(2.);
                                     let m2 = *x[6];
 
                                     // apply for mass specific momentum cut
-                                    for i in (0..mp_cut.nrows()).into_iter() {
+                                    for i in 0..mp_cut.nrows() {
                                         if m1 >= mp_cut[[i, 0]]
                                             && m1 < mp_cut[[i, 1]]
                                             && m2 >= &mp_cut[[i, 2]]
                                             && m2 < &mp_cut[[i, 3]]
                                         {
-                                            if p_sum <= mp_cut[[i, 4]] {
-                                                return true;
-                                            } else {
-                                                return false;
-                                            }
+                                            return p_sum <= mp_cut[[i, 4]];
                                         }
                                     }
                                     // apply for all other chases
@@ -593,28 +734,73 @@ fn pipico(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         //    .to_pyarray(py)))
     }
 
-    /// generate array of random numbers and check if none are double with reference list
+    /// Generates a unique set of background indices using a random number generator and a given maximum index.
+    ///
+    /// This function generates a set of background indices that are not present in the provided `idx_trg_frame`.
+    /// It uses a random number generator `rng` to generate unique background indices within the range [0, `max_index`).
+    ///
+    /// # Arguments
+    ///
+    /// - `rng`: A mutable reference to a random number generator (e.g., `ThreadRng`).
+    /// - `idx_trg_frame`: A view of the trigger frame indices.
+    /// - `max_index`: The maximum index value (exclusive) for generating background indices.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<usize>` containing the generated unique background indices.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rand::thread_rng;
+    /// use ndarray::{arr1, ArrayView1};
+    /// use pipico::get_bg_idx;
+    ///
+    /// let mut rng = thread_rng();
+    /// let trigger_frame_index = arr1(&[&&1.0, &&3.0, &&5.0, &&7.0, &&9.0, &&11.0]);
+    /// let max_index: usize = 20;
+    /// let result = get_bg_idx(&mut rng, trigger_frame_index.view(), max_index);
+    ///
+    /// // The `result` vector now contains unique background indices.
+    /// ```
+    ///
+    /// Note that the `get_bg_idx` function guarantees that the returned background
+    /// indices are unique and not present in `idx_trg_frame`.
+    ///
+    /// # Performance
+    ///
+    /// This function is optimized for performance and efficiency, making it suitable for generating
+    /// background indices in applications requiring low latency and memory usage.
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if `max_index` is less than the number of elements in `idx_trg_frame`.
+    ///
+    /// # Safety
+    ///
+    /// This function assumes that the input parameters are valid and that the random number
+    /// generator is correctly initialized.
     fn get_bg_idx(
         rng: &mut ThreadRng,
         idx_trg_frame: ArrayBase<ViewRepr<&&&f64>, Dim<[usize; 1]>>,
         max_index: usize,
     ) -> Vec<usize> {
-        let idx_set: HashSet<usize> =
-            HashSet::from_iter(idx_trg_frame.into_iter().map(|x| ***x as usize));
-        let mut idx_bg = HashSet::with_capacity(idx_trg_frame.len());
-        let mut bg: usize;
+        let mut idx_bg = BitSet::new();
+        let mut result = Vec::with_capacity(idx_trg_frame.len());
 
-        for _ in (0..idx_trg_frame.len()).into_iter() {
+        for _ in 0..idx_trg_frame.len() {
+            let mut bg: usize;
             loop {
                 bg = rng.gen_range(0..max_index);
-                if !idx_set.contains(&bg) && !idx_bg.contains(&bg) {
+                if !idx_bg.contains(bg) {
                     idx_bg.insert(bg);
+                    result.push(bg);
                     break;
                 }
             }
         }
 
-        idx_bg.into_iter().collect_vec()
+        result
     }
 
     Ok(())
@@ -630,7 +816,7 @@ pub fn get_bg_idx(
     let mut idx_bg = Vec::<usize>::with_capacity(idx_trg_frame.len());
     let mut bg: usize;
 
-    for _ in (0..idx_trg_frame.len()).into_iter() {
+    for _ in 0..idx_trg_frame.len() {
         loop {
             bg = rng.gen_range(0..max_index);
             if idx_trg_frame.iter().all(|&x| **x != bg as f64) && idx_bg.iter().all(|&x| x != bg) {
@@ -649,22 +835,48 @@ pub fn get_bg_idx_set(
     idx_trg_frame: ArrayBase<ViewRepr<&&&f64>, Dim<[usize; 1]>>,
     max_index: usize,
 ) -> Vec<usize> {
-    let idx_set: HashSet<usize> =
-        HashSet::from_iter(idx_trg_frame.into_iter().map(|x| ***x as usize));
-    let mut idx_bg = HashSet::with_capacity(idx_trg_frame.len());
-    let mut bg: usize;
+    let mut idx_set = HashSet::new();
+    let mut idx_bg = HashSet::new();
+    let mut result = Vec::with_capacity(idx_trg_frame.len());
 
-    for _ in (0..idx_trg_frame.len()).into_iter() {
-        loop {
-            bg = rng.gen_range(0..max_index);
-            if !idx_set.contains(&bg) && !idx_bg.contains(&bg) {
-                idx_bg.insert(bg);
-                break;
-            }
+    for &&&val in idx_trg_frame.iter() {
+        idx_set.insert(val as usize);
+    }
+
+    while result.len() < idx_trg_frame.len() {
+        let bg = rng.gen_range(0..max_index);
+        if !idx_set.contains(&bg) && idx_bg.insert(bg) {
+            result.push(bg);
         }
     }
 
-    idx_bg.into_iter().collect_vec()
+    result
+}
+
+/// optimised rust implementation for benchmarking
+
+pub fn get_bg_idx_set_optimized(
+    rng: &mut ThreadRng,
+    idx_trg_frame: ArrayBase<ViewRepr<&&&f64>, Dim<[usize; 1]>>,
+    max_index: usize,
+) -> Vec<usize> {
+    let idx_set: BitSet = idx_trg_frame
+        .iter()
+        .map(|&&&x| x as usize)
+        .collect::<BitSet>();
+
+    let mut idx_bg = BitSet::with_capacity(idx_trg_frame.len());
+    let mut result = Vec::with_capacity(idx_trg_frame.len());
+
+    while result.len() < idx_trg_frame.len() {
+        let bg: usize = rng.gen_range(0..max_index);
+        if !idx_set.contains(bg) && !idx_bg.contains(bg) {
+            idx_bg.insert(bg);
+            result.push(bg);
+        }
+    }
+
+    result
 }
 
 /// rust implementation for benchmarking
@@ -675,7 +887,7 @@ pub fn ndarray_filter_momentum_bench_2D(
     data: Array2<f64>,
     //) -> PyResult<PyDataFrame> {
 ) -> Array2<f64> {
-    let filter_delta = 0.01;
+    //let filter_delta = 0.01;
     let n_bins = 100;
     let hist_min = 0.;
     let hist_max = 10.;
@@ -699,7 +911,6 @@ pub fn ndarray_filter_momentum_bench_2D(
             // collect all data which belong to a chunk in a "DataFrame"
             let chunk_vec = data
                 .axis_iter(Axis(0))
-                .into_iter()
                 .filter(|x| {
                     (x[0] >= *chunk_triggers.first().unwrap() as f64)
                         & (x[0] <= *chunk_triggers.last().unwrap() as f64)
@@ -722,7 +933,6 @@ pub fn ndarray_filter_momentum_bench_2D(
                     );
                     let trigger_frame_vec = data_chunk
                         .axis_iter(Axis(0))
-                        .into_iter()
                         .filter(|x| *x[0] == *trg_nr as f64)
                         .flatten()
                         .collect_vec();
@@ -742,7 +952,6 @@ pub fn ndarray_filter_momentum_bench_2D(
                         let row = trigger_frame.slice(s![p2.., ..]);
                         let a = row
                             .axis_iter(Axis(0))
-                            .into_iter()
                             .filter(|&x| {
                                 ((*x[2] + *px).powf(2.) + (*x[3] + *py).powf(2.))
                                     < (*px * *px + *py * *py) * 0.0025
@@ -765,7 +974,7 @@ pub fn ndarray_filter_momentum_bench_2D(
         .reduce(|hists, hist| (hists + &hist).expect("Axes are compatible"))
         .unwrap();
 
-    let a_hist: Array2<f64> = Array1::from_iter(cov_hist.values().map(|v| *v).into_iter())
+    let a_hist: Array2<f64> = Array1::from_iter(cov_hist.values().copied())
         .into_shape((n_bins + 2, n_bins + 2))
         .unwrap();
 
@@ -774,10 +983,10 @@ pub fn ndarray_filter_momentum_bench_2D(
 
 /// rust implementation for benchmarking
 pub fn get_pairs_bench(data: Array2<f64>) -> (Vec<[f64; 2]>, Vec<[f64; 2]>) {
-    let filter_delta = 0.01;
-    let n_bins = 10;
-    let hist_min = 0.;
-    let hist_max = 10.;
+    // let filter_delta = 0.01;
+    // let n_bins = 10;
+    // let hist_min = 0.;
+    // let hist_max = 10.;
 
     let data_trigger = data.column(0);
 
@@ -805,7 +1014,6 @@ pub fn get_pairs_bench(data: Array2<f64>) -> (Vec<[f64; 2]>, Vec<[f64; 2]>) {
             // collect all data which belong to a chunk in a "DataFrame"
             let chunk_vec = data
                 .axis_iter(Axis(0))
-                .into_iter()
                 .filter(|x| {
                     (x[0] >= *chunk_triggers.first().unwrap() as f64)
                         & (x[0] <= *chunk_triggers.last().unwrap() as f64)
@@ -823,7 +1031,6 @@ pub fn get_pairs_bench(data: Array2<f64>) -> (Vec<[f64; 2]>, Vec<[f64; 2]>) {
                 .map(|trg_nr| {
                     let trigger_frame_vec = data_chunk
                         .axis_iter(Axis(0))
-                        .into_iter()
                         .filter(|x| *x[0] == *trg_nr as f64)
                         .flatten()
                         .collect_vec();
@@ -845,7 +1052,6 @@ pub fn get_pairs_bench(data: Array2<f64>) -> (Vec<[f64; 2]>, Vec<[f64; 2]>) {
                         let row = trigger_frame.slice(s![p2.., ..]);
                         let a = row
                             .axis_iter(Axis(0))
-                            .into_iter()
                             .filter(|&x| {
                                 ((*x[2] + *px).powf(2.)
                                     + (*x[3] + *py).powf(2.)
@@ -878,7 +1084,6 @@ pub fn get_pairs_bench(data: Array2<f64>) -> (Vec<[f64; 2]>, Vec<[f64; 2]>) {
                         let row = trigger_frame.slice(s![p2.., ..]);
                         let a = row
                             .axis_iter(Axis(0))
-                            .into_iter()
                             .filter(|&x| {
                                 ((*x[2] + px).powf(2.)
                                     + (*x[3] + py).powf(2.)
@@ -961,7 +1166,6 @@ pub fn get_covar_pairs_fixed_cut(
             // collect all data which belong to a chunk in a "DataFrame"
             let chunk_vec = data
                 .axis_iter(Axis(0))
-                .into_iter()
                 .filter(|x| {
                     (x[0] >= *chunk_triggers.first().unwrap() as f64)
                         & (x[0] <= *chunk_triggers.last().unwrap() as f64)
@@ -979,7 +1183,6 @@ pub fn get_covar_pairs_fixed_cut(
                 .map(|trg_nr| {
                     let trigger_frame_vec = data_chunk
                         .axis_iter(Axis(0))
-                        .into_iter()
                         .filter(|x| *x[0] == *trg_nr as f64)
                         .flatten()
                         .collect_vec();
@@ -1002,7 +1205,6 @@ pub fn get_covar_pairs_fixed_cut(
                         let row = trigger_frame.slice(s![p2.., ..]);
                         let a = row
                             .axis_iter(Axis(0))
-                            .into_iter()
                             .filter(|&x| {
                                 let p_sum = (*x[2] + *px).powf(2.)
                                     + (*x[3] + *py).powf(2.)
@@ -1010,17 +1212,13 @@ pub fn get_covar_pairs_fixed_cut(
                                 let m2 = *x[6];
 
                                 // apply for mass specific momentum cut
-                                for i in (0..mp_cut.nrows()).into_iter() {
+                                for i in 0..mp_cut.nrows() {
                                     if m1 >= &mp_cut[[i, 0]]
                                         && m1 < &mp_cut[[i, 1]]
                                         && m2 >= &mp_cut[[i, 2]]
                                         && m2 < &mp_cut[[i, 3]]
                                     {
-                                        if p_sum <= mp_cut[[i, 4]] {
-                                            return true;
-                                        } else {
-                                            return false;
-                                        }
+                                        return p_sum <= mp_cut[[i, 4]];
                                     }
                                 }
                                 // apply for all other chases
@@ -1058,25 +1256,20 @@ pub fn get_covar_pairs_fixed_cut(
                         let row = trigger_frame.slice(s![p2.., ..]);
                         let a = row
                             .axis_iter(Axis(0))
-                            .into_iter()
                             .filter(|&x| {
-                                let p_sum = ((*x[2] + px).powf(2.)
+                                let p_sum = (*x[2] + px).powf(2.)
                                     + (*x[3] + py).powf(2.)
-                                    + (*x[4] + pz).powf(2.));
+                                    + (*x[4] + pz).powf(2.);
                                 let m2 = *x[6];
 
                                 // apply for mass specific momentum cut
-                                for i in (0..mp_cut.nrows()).into_iter() {
+                                for i in 0..mp_cut.nrows() {
                                     if m1 >= mp_cut[[i, 0]]
                                         && m1 < mp_cut[[i, 1]]
                                         && m2 >= &mp_cut[[i, 2]]
                                         && m2 < &mp_cut[[i, 3]]
                                     {
-                                        if p_sum <= mp_cut[[i, 4]] {
-                                            return true;
-                                        } else {
-                                            return false;
-                                        };
+                                        return p_sum <= mp_cut[[i, 4]];
                                     }
                                 }
                                 // apply for all other chases
@@ -1128,4 +1321,83 @@ pub fn get_covar_pairs_fixed_cut(
     }
 
     (fg, bg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::thread_rng;
+
+    #[test]
+    fn test_get_bg_idx_set() {
+        // Create a mock trigger frame index
+        let trigger_frame_index = arr1(&[&&1.0, &&3.0, &&5.0, &&7.0, &&9.0, &&11.0]);
+
+        let max_index: usize = 20;
+
+        // Initialize the RNG
+        let mut rng = thread_rng();
+
+        // Call the function under test
+        let result = get_bg_idx_set(&mut rng, trigger_frame_index.view(), max_index);
+
+        // Convert the trigger_frame_index to a HashSet for efficient containment check
+        let trigger_frame_set: std::collections::HashSet<u64> =
+            trigger_frame_index.iter().map(|&&&x| x as u64).collect();
+
+        // Assert that the result contains the correct number of unique indices
+        assert_eq!(result.len(), trigger_frame_index.len());
+
+        // Assert that the result contains indices that are not in the trigger frame index
+        for bg in &result {
+            assert!(!trigger_frame_set.contains(&(*bg as u64)));
+        }
+
+        // Assert that the result only contains unique indices
+        assert_eq!(
+            result.len(),
+            result
+                .iter()
+                .cloned()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+        );
+    }
+
+    #[test]
+    fn test_get_bg_idx_set_opt() {
+        // Create a mock trigger frame index
+        let trigger_frame_index = arr1(&[&&1.0, &&3.0, &&5.0, &&7.0, &&9.0, &&11.0]);
+
+        let max_index: usize = 20;
+
+        // Initialize the RNG
+        let mut rng = thread_rng();
+
+        // Call the function under test
+        let result = get_bg_idx_set_optimized(&mut rng, trigger_frame_index.view(), max_index);
+
+        // Convert the trigger_frame_index to a HashSet for efficient containment check
+        let trigger_frame_set: std::collections::HashSet<u64> =
+            trigger_frame_index.iter().map(|&&&x| x as u64).collect();
+
+        // Assert that the result contains the correct number of unique indices
+        assert_eq!(result.len(), trigger_frame_index.len());
+
+        // Assert that the result contains indices that are not in the trigger frame index
+        dbg!(&result);
+        for bg in &result {
+            assert!(!trigger_frame_set.contains(&(*bg as u64)));
+        }
+
+        // Assert that the result only contains unique indices
+        assert_eq!(
+            result.len(),
+            result
+                .iter()
+                .cloned()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+        );
+    }
 }

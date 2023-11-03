@@ -6,23 +6,21 @@ use ndarray::prelude::*;
 
 use polars::prelude::*;
 
-use pipico;
-
 fn main() {
-    let n_bins = 10;
+    //let n_bins = 10;
     let n_shots = 4;
     let n_parts = 10;
 
     //let trigger_nrs = (0..n_shots).into_iter().map(|x|x);
     let mut trigger_nrs = Vec::new();
-    for i in (0..n_shots).into_iter() {
-        for j in (0..n_parts).into_iter() {
+    for i in 0..n_shots {
+        for _ in 0..n_parts {
             trigger_nrs.push(i);
         }
     }
 
     // open file
-    let mut file = std::fs::File::open(
+    let file = std::fs::File::open(
         "/Users/brombh/data/programm/rust/pipico_simple_example/tests/test_data-1e3-1e1.feather",
     )
     .expect("file not found");
@@ -33,7 +31,7 @@ fn main() {
     let a = df
         .select(["trigger nr", "idx", "px", "py", "pz"])
         .unwrap()
-        .to_ndarray::<Float64Type>()
+        .to_ndarray::<Float64Type>(IndexOrder::C)
         .unwrap();
     let (fg, bg) = pipico::get_pairs_bench(a.clone());
     dbg!(fg, bg);
@@ -58,8 +56,6 @@ fn main() {
     ]);
     let default_momentum_cut = 1.;
     dbg!(&default_momentum_cut);
-    let (fg, bg) = pipico::get_covar_pairs_fixed_cut(a, mass_momentum_cut, default_momentum_cut);
+    let (fg, _bg) = pipico::get_covar_pairs_fixed_cut(a, mass_momentum_cut, default_momentum_cut);
     dbg!(fg);
-
-
 }
